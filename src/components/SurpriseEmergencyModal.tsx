@@ -1,6 +1,7 @@
-import { AlertTriangle, CheckCircle2, Compass, ShieldAlert, Wrench } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Compass, ShieldAlert, Wrench, Zap } from 'lucide-react';
 import { BASE_STATIONS } from '../data/scienceData';
 import { BackpackInventory, SurpriseEmergency, SurpriseOption } from '../types/game';
+import { IncidentVisualCard, IncidentVisualId } from './IncidentVisualCard';
 
 interface SurpriseEmergencyModalProps {
   emergency: SurpriseEmergency;
@@ -34,7 +35,7 @@ export function SurpriseEmergencyModal({
       aria-labelledby="surprise-title"
     >
       <div className="animate-modal-pop w-full max-w-2xl rounded-3xl bg-white border-2 border-rose-300 shadow-2xl p-5 sm:p-6 my-auto text-slate-900">
-        <div className="flex flex-wrap items-start justify-between gap-3 mb-3.5">
+        <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
           <div className="flex items-center gap-3">
             <div
               className={`w-12 h-12 rounded-2xl border-b-4 flex items-center justify-center shrink-0 ${
@@ -44,9 +45,9 @@ export function SurpriseEmergencyModal({
               }`}
             >
               {emergency.severity === 'CRITICAL' ? (
-                <ShieldAlert className="w-6 h-6" />
+                <ShieldAlert className="w-6 h-6 animate-pulse" />
               ) : (
-                <AlertTriangle className="w-6 h-6" />
+                <AlertTriangle className="w-6 h-6 animate-bounce" />
               )}
             </div>
             <div>
@@ -74,11 +75,16 @@ export function SurpriseEmergencyModal({
           )}
         </div>
 
-        <p className="rounded-2xl bg-rose-50 border-2 border-rose-200 p-4 text-sm sm:text-base font-bold text-slate-900 leading-relaxed mb-3">
+        {/* Visual Depiction of Exact Space Problem */}
+        <div className="mb-3">
+          <IncidentVisualCard id={emergency.id as IncidentVisualId} />
+        </div>
+
+        <p className="rounded-2xl bg-rose-50 border-2 border-rose-200 p-3.5 text-sm sm:text-base font-bold text-slate-900 leading-relaxed mb-2.5">
           {emergency.description}
         </p>
 
-        <div className="rounded-2xl bg-sky-50 border border-sky-200 px-4 py-2.5 mb-4 text-xs sm:text-sm font-medium text-sky-950 flex items-start gap-2">
+        <div className="rounded-2xl bg-sky-50 border border-sky-200 px-3.5 py-2 mb-3.5 text-xs sm:text-sm font-medium text-sky-950 flex items-start gap-2">
           <Wrench className="w-4 h-4 text-sky-600 shrink-0 mt-0.5" />
           <span>
             <strong className="text-sky-900">Real Space Physics:</strong> {emergency.physicsFact}
@@ -86,7 +92,7 @@ export function SurpriseEmergencyModal({
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
-          {emergency.options.map((opt) => {
+          {emergency.options.map((opt, idx) => {
             const missingItem = opt.requiresItem ? backpack[opt.requiresItem] <= 0 : false;
             return (
               <button
@@ -94,13 +100,22 @@ export function SurpriseEmergencyModal({
                 type="button"
                 disabled={missingItem}
                 onClick={() => onChooseOption(opt)}
-                className={`btn-tactile hover-option-card rounded-2xl border-2 border-b-4 p-4 text-left flex flex-col justify-between gap-2 cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed ${
+                className={`group btn-tactile hover-option-card rounded-2xl border-2 border-b-4 p-3.5 text-left flex flex-col justify-between gap-2 cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed ${
                   OPTION_TONE[opt.tone]
                 }`}
               >
                 <div>
-                  <div className="font-display font-extrabold text-base text-slate-900 leading-tight mb-1">
-                    {opt.label}
+                  <div className="flex items-start justify-between gap-2 mb-1">
+                    <div className="font-display font-extrabold text-base text-slate-900 leading-tight">
+                      {opt.label}
+                    </div>
+                    <span className="w-7 h-7 rounded-xl bg-white/80 border border-slate-300 flex items-center justify-center shrink-0 transition-transform group-hover:scale-110">
+                      {idx === 0 ? (
+                        <Wrench className="w-4 h-4 text-emerald-700" />
+                      ) : (
+                        <Zap className="w-4 h-4 text-amber-700" />
+                      )}
+                    </span>
                   </div>
                   <div className="text-xs font-mono-tabular font-extrabold text-slate-700">
                     {missingItem ? 'Out of 3D Filament Spools!' : opt.costSummary}

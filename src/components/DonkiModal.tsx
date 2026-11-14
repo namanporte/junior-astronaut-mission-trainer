@@ -1,7 +1,8 @@
 import { useEffect } from 'react';
-import { Calendar, Radio, Sun, X } from 'lucide-react';
+import { Calendar, Flame, Radio, Sparkles, Sun, X } from 'lucide-react';
 import { FlareSeverity, SolarFlareEvent } from '../types/game';
 import { getFlareNickname } from '../utils/physicsSimulation';
+import { IncidentVisualCard } from './IncidentVisualCard';
 
 interface DonkiModalProps {
   currentSol: number;
@@ -35,23 +36,23 @@ export function DonkiModal({ currentSol, events, radarHidden, onClose }: DonkiMo
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 p-4 overflow-y-auto"
       role="dialog"
       aria-modal="true"
       aria-labelledby="donki-modal-title"
     >
-      <div className="animate-modal-pop w-full max-w-2xl rounded-3xl bg-white border-2 border-slate-200 shadow-2xl p-6 text-slate-900">
-        <div className="flex items-start justify-between gap-4 mb-4">
+      <div className="animate-modal-pop w-full max-w-2xl rounded-3xl bg-white border-2 border-slate-200 shadow-2xl p-5 sm:p-6 my-auto text-slate-900">
+        <div className="flex items-start justify-between gap-4 mb-3">
           <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-2xl bg-amber-400 border-b-2 border-amber-600 flex items-center justify-center text-amber-950 shrink-0">
+            <div className="animate-burp-pulse w-11 h-11 rounded-2xl bg-amber-400 border-b-2 border-amber-600 flex items-center justify-center text-amber-950 shrink-0">
               <Sun className="w-6 h-6" />
             </div>
             <div>
               <h2 id="donki-modal-title" className="text-xl font-extrabold text-slate-900">
-                Sun Storm Radar Forecast
+                Sun Storm &amp; Sun Burp Radar
               </h2>
               <p className="text-xs font-medium text-slate-600">
-                Check upcoming Sun Burps and Monster Blasts across all {events.length} Sols!
+                See incoming Sun Burps and Monster Blasts hitting your Forcefield across {events.length} Sols!
               </p>
             </div>
           </div>
@@ -65,10 +66,22 @@ export function DonkiModal({ currentSol, events, radarHidden, onClose }: DonkiMo
           </button>
         </div>
 
+        {/* Live Animated Sun Burp / Solar Storm Illustration */}
+        {!radarHidden && (
+          <div className="mb-3.5">
+            <IncidentVisualCard
+              id="storm-preview"
+              compact
+              stormSeverity={activeEvent.severityLevel}
+              customCaption={`Sol ${currentSol}: ${stormName} approaching — raise Forcefield to ${activeEvent.requiredShieldKw}⚡!`}
+            />
+          </div>
+        )}
+
         <div className="rounded-2xl bg-slate-50 border-2 border-slate-200 p-4 mb-4">
           {radarHidden ? (
             <div className="flex items-center gap-3 py-2 text-amber-900">
-              <Radio className="w-6 h-6 text-amber-600 shrink-0" />
+              <Radio className="w-6 h-6 text-amber-600 shrink-0 animate-pulse" />
               <div>
                 <div className="font-display font-extrabold text-base">
                   Radar Static Interference!
@@ -134,8 +147,19 @@ export function DonkiModal({ currentSol, events, radarHidden, onClose }: DonkiMo
                   }`}
                 >
                   <div className="text-[11px] font-extrabold">Sol {solNum}</div>
+                  <div className="my-1 flex justify-center">
+                    {isScrambled ? (
+                      <Radio className="w-4 h-4 text-slate-400 animate-pulse" />
+                    ) : evt.severityLevel === 'EXTREME' ? (
+                      <Flame className="w-4 h-4 text-rose-500 animate-burp-pulse" />
+                    ) : evt.severityLevel === 'MODERATE' ? (
+                      <Sun className="w-4 h-4 text-amber-500 animate-pulse" />
+                    ) : (
+                      <Sparkles className="w-4 h-4 text-emerald-600" />
+                    )}
+                  </div>
                   <div
-                    className={`font-display text-[11px] mt-0.5 font-extrabold ${
+                    className={`font-display text-[10px] font-extrabold ${
                       isScrambled
                         ? 'text-slate-500'
                         : evt.severityLevel === 'EXTREME'

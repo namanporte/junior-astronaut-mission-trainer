@@ -3,7 +3,9 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { BASE_STATIONS } from '../data/scienceData';
 import {
+  ActiveActionSequence,
   BaseSystemsState,
+  FlareSeverity,
   GamePhase,
   PowerAllocation,
   StationId,
@@ -22,6 +24,8 @@ interface Outpost3DViewportProps {
   phase: GamePhase;
   systems: BaseSystemsState;
   power: PowerAllocation;
+  upcomingFlareSeverity?: FlareSeverity;
+  activeAction?: ActiveActionSequence | null;
   activeEmergencyStation: StationId | null;
   nearestStation: StationId | null;
   jumpNonce: number;
@@ -29,6 +33,8 @@ interface Outpost3DViewportProps {
   onNearestStationChange: (station: StationId | null, distance: number) => void;
   onSelectStation: (station: StationId) => void;
   onFootstepJump: () => void;
+  onActionStageChange?: (stage: 'WALKING' | 'WORKING') => void;
+  onActionComplete?: () => void;
 }
 
 // Module-scope reusable math helpers (zero per-frame GC churn)
@@ -40,100 +46,350 @@ const _groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 const _hitPoint = new THREE.Vector3();
 const _dummy = new THREE.Object3D();
 
-function makeProceduralTerrainTexture(world: WorldBody): THREE.CanvasTexture {
+/**
+ * Deterministic terrain elevation: flat graded landing pad inside r < 22m,
+ * realistic undulating cratered hills and ridges outside the outpost.
+ */
+function sampleTerrainHeight(x: number, z: number, world: WorldBody): number {
+  const r = Math.hypot(x, z);
+  if (r <= 21.5) return 0;
+  const blend = THREE.MathUtils.smoothstep(r, 21.5, 34);
+  const amp = world === 'MOON' ? 1.85 : 1.55;
+  const ridge =
+    Math.sin(x * 0.085) * Math.cos(z * 0.085) * 1.6 +
+    Math.sin(x * 0.21 + 1.4) * Math.sin(z * 0.19 - 0.7) * 0.65 +
+    Math.cos((x + z) * 0.12) * 0.55;
+  const crater = Math.max(0, Math.sin(r * 0.16) * 0.9);
+  const rimLift = THREE.MathUtils.smoothstep(r, 48, 82) * 6.5;
+  return blend * (amp * (0.45 + ridge * 0.5 + crater) + rimLift);
+}
+
+/**
+ * Generates paired photorealistic Regolith Albedo + Bump maps so sunlight
+ * rakes across microscopic pebbles, wheel tracks, and micro-craters.
+ */
+function makeRegolithMaps(world: WorldBody): {
+  map: THREE.CanvasTexture;
+  bumpMap: THREE.CanvasTexture;
+} {
+  const size = 1024;
+  const colorCanvas = document.createElement('canvas');
+  colorCanvas.width = size;
+  colorCanvas.height = size;
+  const cCtx = colorCanvas.getContext('2d')!;
+
+  const bumpCanvas = document.createElement('canvas');
+  bumpCanvas.width = size;
+  bumpCanvas.height = size;
+  const bCtx = bumpCanvas.getContext('2d')!;
+
+  cCtx.fillStyle = world === 'MOON' ? '#5E6573' : '#96492D';
+  cCtx.fillRect(0, 0, size, size);
+  bCtx.fillStyle = '#808080';
+  bCtx.fillRect(0, 0, size, size);
+
+  // Organic multi-scale mineral variation
+  for (let i = 0; i < 160; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const rad = 28 + Math.random() * 85;
+    const g = cCtx.createRadialGradient(x, y, 2, x, y, rad);
+    if (world === 'MOON') {
+      g.addColorStop(0, i % 2 === 0 ? 'rgba(130,140,158,0.16)' : 'rgba(55,62,74,0.18)');
+      g.addColorStop(1, 'rgba(94,101,115,0)');
+    } else {
+      g.addColorStop(0, i % 2 === 0 ? 'rgba(186,98,58,0.18)' : 'rgba(102,42,22,0.2)');
+      g.addColorStop(1, 'rgba(150,73,45,0)');
+    }
+    cCtx.fillStyle = g;
+    cCtx.beginPath();
+    cCtx.arc(x, y, rad, 0, Math.PI * 2);
+    cCtx.fill();
+  }
+
+  // Sharp fine regolith grit & rocks in both albedo and heightmap
+  for (let i = 0; i < 14000; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const r = 0.6 + Math.random() * 2.4;
+    const bright = Math.random() > 0.48;
+    if (world === 'MOON') {
+      cCtx.fillStyle = bright ? 'rgba(210,218,232,0.22)' : 'rgba(28,32,42,0.26)';
+    } else {
+      cCtx.fillStyle = bright ? 'rgba(232,144,96,0.22)' : 'rgba(68,22,12,0.24)';
+    }
+    cCtx.beginPath();
+    cCtx.arc(x, y, r, 0, Math.PI * 2);
+    cCtx.fill();
+
+    bCtx.fillStyle = bright ? 'rgba(225,225,225,0.34)' : 'rgba(35,35,35,0.34)';
+    bCtx.beginPath();
+    bCtx.arc(x, y, r * 1.1, 0, Math.PI * 2);
+    bCtx.fill();
+  }
+
+  // Crisp micrometeorite impact craters with bright ejecta rims
+  for (let c = 0; c < 42; c++) {
+    const cx = Math.random() * size;
+    const cy = Math.random() * size;
+    const rad = 10 + Math.random() * 34;
+
+    const cg = cCtx.createRadialGradient(cx, cy, rad * 0.12, cx, cy, rad);
+    if (world === 'MOON') {
+      cg.addColorStop(0, 'rgba(34,38,48,0.45)');
+      cg.addColorStop(0.68, 'rgba(62,68,80,0.24)');
+      cg.addColorStop(0.88, 'rgba(186,196,214,0.22)');
+      cg.addColorStop(1, 'rgba(94,101,115,0)');
+    } else {
+      cg.addColorStop(0, 'rgba(64,22,12,0.42)');
+      cg.addColorStop(0.68, 'rgba(124,52,28,0.22)');
+      cg.addColorStop(0.88, 'rgba(218,128,84,0.22)');
+      cg.addColorStop(1, 'rgba(150,73,45,0)');
+    }
+    cCtx.fillStyle = cg;
+    cCtx.beginPath();
+    cCtx.arc(cx, cy, rad, 0, Math.PI * 2);
+    cCtx.fill();
+
+    const bg = bCtx.createRadialGradient(cx, cy, rad * 0.1, cx, cy, rad);
+    bg.addColorStop(0, 'rgba(20,20,20,0.72)');
+    bg.addColorStop(0.7, 'rgba(105,105,105,0.35)');
+    bg.addColorStop(0.88, 'rgba(235,235,235,0.55)');
+    bg.addColorStop(1, 'rgba(128,128,128,0)');
+    bCtx.fillStyle = bg;
+    bCtx.beginPath();
+    bCtx.arc(cx, cy, rad, 0, Math.PI * 2);
+    bCtx.fill();
+  }
+
+  const map = new THREE.CanvasTexture(colorCanvas);
+  map.wrapS = THREE.RepeatWrapping;
+  map.wrapT = THREE.RepeatWrapping;
+  map.repeat.set(9, 9);
+  map.colorSpace = THREE.SRGBColorSpace;
+
+  const bumpMap = new THREE.CanvasTexture(bumpCanvas);
+  bumpMap.wrapS = THREE.RepeatWrapping;
+  bumpMap.wrapT = THREE.RepeatWrapping;
+  bumpMap.repeat.set(9, 9);
+
+  return { map, bumpMap };
+}
+
+/**
+ * Generates realistic crinkled Gold Kapton Multi-Layer Insulation (MLI) foil textures.
+ */
+function makeKaptonFoilMaps(): {
+  map: THREE.CanvasTexture;
+  bumpMap: THREE.CanvasTexture;
+} {
+  const size = 256;
+  const col = document.createElement('canvas');
+  col.width = size;
+  col.height = size;
+  const ctx = col.getContext('2d')!;
+
+  const bmp = document.createElement('canvas');
+  bmp.width = size;
+  bmp.height = size;
+  const btx = bmp.getContext('2d')!;
+
+  ctx.fillStyle = '#D99B16';
+  ctx.fillRect(0, 0, size, size);
+  btx.fillStyle = '#808080';
+  btx.fillRect(0, 0, size, size);
+
+  for (let i = 0; i < 420; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const w = 8 + Math.random() * 24;
+    const h = 4 + Math.random() * 14;
+    const ang = Math.random() * Math.PI;
+    const shade = Math.random();
+
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(ang);
+    ctx.fillStyle =
+      shade > 0.55
+        ? 'rgba(255, 224, 118, 0.36)'
+        : shade > 0.25
+        ? 'rgba(180, 110, 12, 0.34)'
+        : 'rgba(120, 65, 6, 0.28)';
+    ctx.fillRect(-w / 2, -h / 2, w, h);
+    ctx.restore();
+
+    btx.save();
+    btx.translate(x, y);
+    btx.rotate(ang);
+    btx.fillStyle = shade > 0.5 ? 'rgba(240,240,240,0.45)' : 'rgba(30,30,30,0.45)';
+    btx.fillRect(-w / 2, -h / 2, w, h);
+    btx.restore();
+  }
+
+  const map = new THREE.CanvasTexture(col);
+  map.wrapS = THREE.RepeatWrapping;
+  map.wrapT = THREE.RepeatWrapping;
+  map.colorSpace = THREE.SRGBColorSpace;
+
+  const bumpMap = new THREE.CanvasTexture(bmp);
+  bumpMap.wrapS = THREE.RepeatWrapping;
+  bumpMap.wrapT = THREE.RepeatWrapping;
+
+  return { map, bumpMap };
+}
+
+/**
+ * Aerospace hull plating texture with recessed structural ribs, rivets, and seams.
+ */
+function makeHullPlateMaps(): {
+  map: THREE.CanvasTexture;
+  bumpMap: THREE.CanvasTexture;
+} {
+  const size = 512;
+  const col = document.createElement('canvas');
+  col.width = size;
+  col.height = size;
+  const ctx = col.getContext('2d')!;
+
+  const bmp = document.createElement('canvas');
+  bmp.width = size;
+  bmp.height = size;
+  const btx = bmp.getContext('2d')!;
+
+  ctx.fillStyle = '#E6ECF4';
+  ctx.fillRect(0, 0, size, size);
+  btx.fillStyle = '#A0A0A0';
+  btx.fillRect(0, 0, size, size);
+
+  // Subtle brushed sheen + panel grids
+  for (let gx = 0; gx < 4; gx++) {
+    for (let gy = 0; gy < 4; gy++) {
+      const px = gx * 128;
+      const py = gy * 128;
+      ctx.fillStyle = (gx + gy) % 2 === 0 ? 'rgba(255,255,255,0.22)' : 'rgba(203,213,225,0.25)';
+      ctx.fillRect(px + 3, py + 3, 122, 122);
+
+      ctx.strokeStyle = '#94A3B8';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(px + 2, py + 2, 124, 124);
+
+      btx.strokeStyle = '#303030';
+      btx.lineWidth = 4;
+      btx.strokeRect(px + 2, py + 2, 124, 124);
+
+      // Corner rivets
+      ctx.fillStyle = '#64748B';
+      btx.fillStyle = '#E8E8E8';
+      [
+        [px + 10, py + 10],
+        [px + 118, py + 10],
+        [px + 10, py + 118],
+        [px + 118, py + 118]
+      ].forEach(([rx, ry]) => {
+        ctx.beginPath();
+        ctx.arc(rx, ry, 2.2, 0, Math.PI * 2);
+        ctx.fill();
+        btx.beginPath();
+        btx.arc(rx, ry, 2.5, 0, Math.PI * 2);
+        btx.fill();
+      });
+    }
+  }
+
+  const map = new THREE.CanvasTexture(col);
+  map.wrapS = THREE.RepeatWrapping;
+  map.wrapT = THREE.RepeatWrapping;
+  map.colorSpace = THREE.SRGBColorSpace;
+
+  const bumpMap = new THREE.CanvasTexture(bmp);
+  bumpMap.wrapS = THREE.RepeatWrapping;
+  bumpMap.wrapT = THREE.RepeatWrapping;
+  return { map, bumpMap };
+}
+
+/**
+ * Monocrystalline silicon photovoltaic array texture with chamfered wafers & silver busbars.
+ */
+function makeSolarCellTexture(): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
   canvas.width = 512;
   canvas.height = 512;
   const ctx = canvas.getContext('2d')!;
 
-  ctx.fillStyle = world === 'MOON' ? '#58606E' : '#9E4B2B';
+  const bgGrad = ctx.createLinearGradient(0, 0, 512, 512);
+  bgGrad.addColorStop(0, '#091A3E');
+  bgGrad.addColorStop(0.5, '#0E295E');
+  bgGrad.addColorStop(1, '#081533');
+  ctx.fillStyle = bgGrad;
   ctx.fillRect(0, 0, 512, 512);
 
-  // Fine regolith speckle & pebbles
-  for (let i = 0; i < 4200; i++) {
-    const x = Math.random() * 512;
-    const y = Math.random() * 512;
-    const r = 0.8 + Math.random() * 2.2;
-    const bright = Math.random() > 0.5;
-    if (world === 'MOON') {
-      ctx.fillStyle = bright ? 'rgba(205,215,230,0.18)' : 'rgba(30,36,48,0.22)';
-    } else {
-      ctx.fillStyle = bright ? 'rgba(235,145,95,0.2)' : 'rgba(82,28,14,0.22)';
+  const cells = 8;
+  const step = 512 / cells;
+  for (let r = 0; r < cells; r++) {
+    for (let c = 0; c < cells; c++) {
+      const x = c * step + 2;
+      const y = r * step + 2;
+      const w = step - 4;
+      ctx.fillStyle = '#0D2658';
+      ctx.fillRect(x, y, w, w);
+
+      // Subtle silver collector fingers
+      ctx.strokeStyle = 'rgba(148, 197, 255, 0.32)';
+      ctx.lineWidth = 1;
+      for (let f = 1; f < 4; f++) {
+        ctx.beginPath();
+        ctx.moveTo(x + 2, y + (w / 4) * f);
+        ctx.lineTo(x + w - 2, y + (w / 4) * f);
+        ctx.stroke();
+      }
+      // Central silver busbar
+      ctx.fillStyle = 'rgba(203, 227, 255, 0.65)';
+      ctx.fillRect(x + w * 0.48, y + 1, 2, w - 2);
     }
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fill();
   }
 
-  // Subtle craters
-  for (let c = 0; c < 14; c++) {
-    const cx = Math.random() * 512;
-    const cy = Math.random() * 512;
-    const rad = 12 + Math.random() * 26;
-    const grad = ctx.createRadialGradient(cx, cy, rad * 0.2, cx, cy, rad);
-    if (world === 'MOON') {
-      grad.addColorStop(0, 'rgba(32,38,48,0.35)');
-      grad.addColorStop(0.75, 'rgba(48,55,68,0.2)');
-      grad.addColorStop(1, 'rgba(180,192,210,0.14)');
-    } else {
-      grad.addColorStop(0, 'rgba(72,24,10,0.35)');
-      grad.addColorStop(0.75, 'rgba(128,55,30,0.18)');
-      grad.addColorStop(1, 'rgba(220,120,76,0.14)');
-    }
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.arc(cx, cy, rad, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(8, 8);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-}
-
-function makeSolarCellTexture(): THREE.CanvasTexture {
-  const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 256;
-  const ctx = canvas.getContext('2d')!;
-  ctx.fillStyle = '#0F2958';
-  ctx.fillRect(0, 0, 256, 256);
-
-  ctx.strokeStyle = '#38BDF8';
-  ctx.lineWidth = 2;
-  for (let i = 0; i <= 256; i += 32) {
-    ctx.beginPath();
-    ctx.moveTo(i, 0);
-    ctx.lineTo(i, 256);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(0, i);
-    ctx.lineTo(256, i);
-    ctx.stroke();
-  }
+  // Outer aluminum frame border
+  ctx.strokeStyle = '#94A3B8';
+  ctx.lineWidth = 8;
+  ctx.strokeRect(4, 4, 504, 504);
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
 
+/**
+ * Grated pressurized catwalk deck with yellow-black EVA hazard borders.
+ */
 function makeDeckTexture(): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
   canvas.width = 256;
   canvas.height = 256;
   const ctx = canvas.getContext('2d')!;
-  ctx.fillStyle = '#334155';
+  ctx.fillStyle = '#263042';
   ctx.fillRect(0, 0, 256, 256);
-  ctx.strokeStyle = '#475569';
+
+  // Diamond deck ribs
+  ctx.strokeStyle = '#3B4961';
+  ctx.lineWidth = 2;
+  for (let y = 0; y < 256; y += 16) {
+    ctx.beginPath();
+    ctx.moveTo(16, y);
+    ctx.lineTo(240, y);
+    ctx.stroke();
+  }
+  ctx.strokeStyle = '#1E293B';
   ctx.lineWidth = 4;
-  ctx.strokeRect(8, 8, 240, 240);
-  // Subtle safety strip
-  ctx.fillStyle = '#F59E0B';
-  ctx.fillRect(0, 0, 256, 10);
-  ctx.fillRect(0, 246, 256, 10);
+  ctx.strokeRect(14, 2, 228, 252);
+
+  // Hazard yellow-black strips on outer edges
+  for (let i = 0; i < 256; i += 32) {
+    ctx.fillStyle = (i / 32) % 2 === 0 ? '#EAB308' : '#1E293B';
+    ctx.fillRect(0, i, 12, 32);
+    ctx.fillRect(244, i, 12, 32);
+  }
+
   const tex = new THREE.CanvasTexture(canvas);
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
@@ -142,127 +398,286 @@ function makeDeckTexture(): THREE.CanvasTexture {
   return tex;
 }
 
-function createAstronautHero(world: WorldBody) {
+/**
+ * Detailed Earth texture seen in the lunar sky with oceans, continents & clouds.
+ */
+function makeEarthSphereTexture(): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d')!;
+
+  const ocean = ctx.createLinearGradient(0, 0, 0, 256);
+  ocean.addColorStop(0, '#E2E8F0');
+  ocean.addColorStop(0.12, '#1D4ED8');
+  ocean.addColorStop(0.5, '#0369A1');
+  ocean.addColorStop(0.88, '#1D4ED8');
+  ocean.addColorStop(1, '#F1F5F9');
+  ctx.fillStyle = ocean;
+  ctx.fillRect(0, 0, 512, 256);
+
+  // Stylized realistic continent blobs
+  ctx.fillStyle = '#3F7D4C';
+  [
+    [130, 105, 55, 36],
+    [170, 155, 32, 42],
+    [295, 95, 65, 38],
+    [335, 145, 42, 34],
+    [415, 165, 36, 26]
+  ].forEach(([cx, cy, rx, ry]) => {
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, rx, ry, 0.25, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  // Swirling atmospheric cloud bands
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.48)';
+  for (let i = 0; i < 48; i++) {
+    const cx = Math.random() * 512;
+    const cy = 20 + Math.random() * 216;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, 18 + Math.random() * 44, 5 + Math.random() * 10, (Math.random() - 0.5) * 0.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function createAstronautHero(
+  world: WorldBody,
+  hullMaps: { map: THREE.CanvasTexture; bumpMap: THREE.CanvasTexture },
+  kaptonMaps: { map: THREE.CanvasTexture; bumpMap: THREE.CanvasTexture }
+) {
   const root = new THREE.Group();
 
   const suitMat = new THREE.MeshStandardMaterial({
-    color: 0xf1f5f9,
-    roughness: 0.45,
-    metalness: 0.15
+    map: hullMaps.map,
+    bumpMap: hullMaps.bumpMap,
+    bumpScale: 0.015,
+    color: 0xf4f7fb,
+    roughness: 0.52,
+    metalness: 0.12
+  });
+  const jointMat = new THREE.MeshStandardMaterial({
+    color: 0x475569,
+    roughness: 0.68,
+    metalness: 0.28
   });
   const trimMat = new THREE.MeshStandardMaterial({
     color: world === 'MOON' ? 0x2563eb : 0xea580c,
     roughness: 0.35,
-    metalness: 0.25
-  });
-  const bootMat = new THREE.MeshStandardMaterial({
-    color: 0x334155,
-    roughness: 0.75,
     metalness: 0.3
   });
+  const foilMat = new THREE.MeshStandardMaterial({
+    map: kaptonMaps.map,
+    bumpMap: kaptonMaps.bumpMap,
+    bumpScale: 0.02,
+    metalness: 0.88,
+    roughness: 0.26
+  });
+  const bootMat = new THREE.MeshStandardMaterial({
+    color: 0x1e293b,
+    roughness: 0.82,
+    metalness: 0.25
+  });
   const visorMat = new THREE.MeshPhysicalMaterial({
-    color: 0xfbbf24,
-    metalness: 0.92,
-    roughness: 0.12,
-    clearcoat: 1.0
+    color: 0xf59e0b,
+    metalness: 0.94,
+    roughness: 0.08,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.06
   });
 
-  // Left & Right Legs (pivoted at hip y=0.82)
+  // Legs with articulated knee rings & ribbed tread boots
   const leftLegPivot = new THREE.Group();
-  leftLegPivot.position.set(-0.2, 0.82, 0);
-  const legGeo = new THREE.CapsuleGeometry(0.13, 0.42, 6, 10);
-  const bootGeo = new THREE.BoxGeometry(0.28, 0.16, 0.38);
+  leftLegPivot.position.set(-0.2, 0.84, 0);
+  const legGeo = new THREE.CapsuleGeometry(0.135, 0.42, 8, 12);
+  const kneeGeo = new THREE.TorusGeometry(0.145, 0.03, 8, 16);
+  const bootGeo = new THREE.BoxGeometry(0.28, 0.18, 0.4);
 
   const leftLegMesh = new THREE.Mesh(legGeo, suitMat);
-  leftLegMesh.position.y = -0.3;
+  leftLegMesh.position.y = -0.32;
   leftLegMesh.castShadow = true;
+  const leftKnee = new THREE.Mesh(kneeGeo, jointMat);
+  leftKnee.rotation.x = Math.PI / 2;
+  leftKnee.position.y = -0.34;
   const leftBoot = new THREE.Mesh(bootGeo, bootMat);
-  leftBoot.position.set(0, -0.74, 0.05);
+  leftBoot.position.set(0, -0.75, 0.06);
   leftBoot.castShadow = true;
-  leftLegPivot.add(leftLegMesh, leftBoot);
+  leftLegPivot.add(leftLegMesh, leftKnee, leftBoot);
 
   const rightLegPivot = new THREE.Group();
-  rightLegPivot.position.set(0.2, 0.82, 0);
+  rightLegPivot.position.set(0.2, 0.84, 0);
   const rightLegMesh = new THREE.Mesh(legGeo, suitMat);
-  rightLegMesh.position.y = -0.3;
+  rightLegMesh.position.y = -0.32;
   rightLegMesh.castShadow = true;
+  const rightKnee = new THREE.Mesh(kneeGeo, jointMat);
+  rightKnee.rotation.x = Math.PI / 2;
+  rightKnee.position.y = -0.34;
   const rightBoot = new THREE.Mesh(bootGeo, bootMat);
-  rightBoot.position.set(0, -0.74, 0.05);
+  rightBoot.position.set(0, -0.75, 0.06);
   rightBoot.castShadow = true;
-  rightLegPivot.add(rightLegMesh, rightBoot);
+  rightLegPivot.add(rightLegMesh, rightKnee, rightBoot);
 
-  // Torso + Belt + PLSS Backpack
-  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.78, 0.44), suitMat);
-  torso.position.y = 1.24;
+  // Upper Torso HUT (Hard Upper Torso) + Chest DCM Control Pack + PLSS Backpack
+  const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.31, 0.78, 14), suitMat);
+  torso.scale.set(1.05, 1, 0.74);
+  torso.position.y = 1.26;
   torso.castShadow = true;
 
-  const belt = new THREE.Mesh(new THREE.BoxGeometry(0.71, 0.14, 0.47), trimMat);
+  const belt = new THREE.Mesh(new THREE.CylinderGeometry(0.33, 0.34, 0.14, 14), trimMat);
+  belt.scale.set(1.06, 1, 0.78);
   belt.position.y = 0.94;
 
-  const backpack = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.66, 0.28), trimMat);
-  backpack.position.set(0, 1.28, -0.32);
-  backpack.castShadow = true;
+  const chestPack = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.24, 0.14), jointMat);
+  chestPack.position.set(0, 1.32, 0.26);
+  const chestLed = new THREE.Mesh(
+    new THREE.BoxGeometry(0.16, 0.06, 0.03),
+    new THREE.MeshBasicMaterial({ color: 0x38bdf8 })
+  );
+  chestLed.position.set(0, 1.36, 0.335);
 
-  // Helmet + Gold Visor
-  const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.32, 18, 14), suitMat);
-  helmet.position.set(0, 1.88, 0.02);
+  const backpack = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.68, 0.3), suitMat);
+  backpack.position.set(0, 1.32, -0.32);
+  backpack.castShadow = true;
+  const plssFoil = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.26, 0.32), foilMat);
+  plssFoil.position.set(0, 1.12, -0.32);
+  const whipAnt = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.02, 0.55, 6), jointMat);
+  whipAnt.position.set(0.2, 1.85, -0.36);
+
+  // Helmet Collar Ring + Dome + Gold Reflective Visor + Headlamp
+  const neckRing = new THREE.Mesh(new THREE.TorusGeometry(0.24, 0.045, 8, 20), trimMat);
+  neckRing.rotation.x = Math.PI / 2;
+  neckRing.position.y = 1.66;
+
+  const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.33, 22, 16), suitMat);
+  helmet.position.set(0, 1.9, 0.02);
   helmet.castShadow = true;
 
   const visor = new THREE.Mesh(
-    new THREE.SphereGeometry(0.26, 16, 12, 0, Math.PI * 2, 0.25, Math.PI * 0.55),
+    new THREE.SphereGeometry(0.275, 20, 14, 0, Math.PI * 2, 0.22, Math.PI * 0.56),
     visorMat
   );
   visor.rotation.x = Math.PI * 0.48;
-  visor.position.set(0, 1.88, 0.11);
+  visor.position.set(0, 1.9, 0.11);
 
-  // Arms
+  const headlampPod = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.08, 0.12), jointMat);
+  headlampPod.position.set(0, 2.2, 0.14);
+
+  // Articulated Arms
   const leftArmPivot = new THREE.Group();
-  leftArmPivot.position.set(-0.44, 1.54, 0);
-  const armGeo = new THREE.CapsuleGeometry(0.11, 0.4, 6, 10);
+  leftArmPivot.position.set(-0.44, 1.56, 0);
+  const armGeo = new THREE.CapsuleGeometry(0.105, 0.42, 8, 10);
   const leftArm = new THREE.Mesh(armGeo, suitMat);
   leftArm.position.y = -0.26;
   leftArm.castShadow = true;
-  leftArmPivot.add(leftArm);
+  const leftGlove = new THREE.Mesh(new THREE.SphereGeometry(0.11, 10, 8), trimMat);
+  leftGlove.position.y = -0.54;
+  leftArmPivot.add(leftArm, leftGlove);
 
   const rightArmPivot = new THREE.Group();
-  rightArmPivot.position.set(0.44, 1.54, 0);
+  rightArmPivot.position.set(0.44, 1.56, 0);
   const rightArm = new THREE.Mesh(armGeo, suitMat);
   rightArm.position.y = -0.26;
   rightArm.castShadow = true;
-  rightArmPivot.add(rightArm);
+  const rightGlove = new THREE.Mesh(new THREE.SphereGeometry(0.11, 10, 8), trimMat);
+  rightGlove.position.y = -0.54;
+  rightArmPivot.add(rightArm, rightGlove);
 
-  // Contact shadow disc
+  // Handheld Engineering Tool + Energy Beam attached to Right Glove
+  const toolTipMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
+  const toolBeamMat = new THREE.MeshBasicMaterial({
+    color: 0x38bdf8,
+    transparent: true,
+    opacity: 0.78
+  });
+  const toolGroup = new THREE.Group();
+  toolGroup.position.set(0, -0.58, 0.08);
+  const toolHandle = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.055, 0.36, 8), jointMat);
+  toolHandle.rotation.x = Math.PI / 2;
+  const toolTip = new THREE.Mesh(new THREE.SphereGeometry(0.075, 10, 8), toolTipMat);
+  toolTip.position.z = 0.22;
+  const toolBeam = new THREE.Mesh(new THREE.ConeGeometry(0.24, 1.45, 10, 1, true), toolBeamMat);
+  toolBeam.rotation.x = -Math.PI / 2;
+  toolBeam.position.z = 0.94;
+  toolGroup.add(toolHandle, toolTip, toolBeam);
+  toolGroup.visible = false;
+  rightArmPivot.add(toolGroup);
+
+  // Upper Body Group (leans/bobs while astronaut works at fixation site!)
+  const upperBodyGroup = new THREE.Group();
+  upperBodyGroup.add(
+    torso,
+    belt,
+    chestPack,
+    chestLed,
+    backpack,
+    plssFoil,
+    whipAnt,
+    neckRing,
+    helmet,
+    visor,
+    headlampPod,
+    leftArmPivot,
+    rightArmPivot
+  );
+
+  // Character-attached Action Aura Ring + Orbiting Work Sparks around Astronaut
+  const auraMat = new THREE.MeshBasicMaterial({
+    color: 0x34d399,
+    transparent: true,
+    opacity: 0.85,
+    side: THREE.DoubleSide
+  });
+  const heroAuraRing = new THREE.Mesh(new THREE.RingGeometry(0.75, 0.98, 28), auraMat);
+  heroAuraRing.rotation.x = -Math.PI / 2;
+  heroAuraRing.position.y = 0.08;
+  heroAuraRing.visible = false;
+
+  const sparkMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.92 });
+  const sparksGroup = new THREE.Group();
+  const heroSparks: THREE.Mesh[] = [];
+  const sparkGeo = new THREE.OctahedronGeometry(0.11, 0);
+  for (let i = 0; i < 6; i++) {
+    const sp = new THREE.Mesh(sparkGeo, sparkMat);
+    sparksGroup.add(sp);
+    heroSparks.push(sp);
+  }
+  sparksGroup.visible = false;
+
+  // Soft contact shadow disc
   const shadowDisc = new THREE.Mesh(
-    new THREE.CircleGeometry(0.56, 20),
+    new THREE.CircleGeometry(0.58, 22),
     new THREE.MeshBasicMaterial({
       color: 0x000000,
       transparent: true,
-      opacity: 0.32,
+      opacity: 0.34,
       depthWrite: false
     })
   );
   shadowDisc.rotation.x = -Math.PI / 2;
   shadowDisc.position.y = 0.03;
 
-  root.add(
-    leftLegPivot,
-    rightLegPivot,
-    torso,
-    belt,
-    backpack,
-    helmet,
-    visor,
-    leftArmPivot,
-    rightArmPivot,
-    shadowDisc
-  );
+  root.add(leftLegPivot, rightLegPivot, upperBodyGroup, heroAuraRing, sparksGroup, shadowDisc);
 
   return {
     root,
+    upperBodyGroup,
     leftLegPivot,
     rightLegPivot,
     leftArmPivot,
     rightArmPivot,
+    toolGroup,
+    toolBeam,
+    toolTipMat,
+    toolBeamMat,
+    heroAuraRing,
+    auraMat,
+    sparksGroup,
+    heroSparks,
+    sparkMat,
     shadowDisc
   };
 }
@@ -272,41 +687,51 @@ export function Outpost3DViewport({
   phase,
   systems,
   power,
+  upcomingFlareSeverity = 'MODERATE',
+  activeAction = null,
   activeEmergencyStation,
   nearestStation,
   jumpNonce,
   dpadRef,
   onNearestStationChange,
   onSelectStation,
-  onFootstepJump
+  onFootstepJump,
+  onActionStageChange,
+  onActionComplete
 }: Outpost3DViewportProps) {
   const mountRef = useRef<HTMLDivElement>(null);
   const [webglFallback, setWebglFallback] = useState(false);
 
-  // Refs synced from React props so the WebGL loop never tears down!
   const systemsRef = useRef(systems);
   const powerRef = useRef(power);
+  const flareSeverityRef = useRef<FlareSeverity>(upcomingFlareSeverity);
+  const activeActionRef = useRef<ActiveActionSequence | null>(activeAction);
   const emergencyStationRef = useRef(activeEmergencyStation);
   const nearestStationPropRef = useRef(nearestStation);
   const phaseRef = useRef(phase);
   const callbacksRef = useRef({
     onNearestStationChange,
     onSelectStation,
-    onFootstepJump
+    onFootstepJump,
+    onActionStageChange,
+    onActionComplete
   });
 
   systemsRef.current = systems;
   powerRef.current = power;
+  flareSeverityRef.current = upcomingFlareSeverity;
+  activeActionRef.current = activeAction;
   emergencyStationRef.current = activeEmergencyStation;
   nearestStationPropRef.current = nearestStation;
   phaseRef.current = phase;
   callbacksRef.current = {
     onNearestStationChange,
     onSelectStation,
-    onFootstepJump
+    onFootstepJump,
+    onActionStageChange,
+    onActionComplete
   };
 
-  // Trigger jump from bottom-dock button too
   const externalJumpTriggerRef = useRef(0);
   useEffect(() => {
     if (jumpNonce > 0) {
@@ -318,7 +743,6 @@ export function Outpost3DViewport({
     const container = mountRef.current;
     if (!container) return;
 
-    // Detect Software WebGL cleanly per Three.js skill protocol
     const isSoftwareGl = (() => {
       const probe = document.createElement('canvas').getContext('webgl2');
       if (!probe) return true;
@@ -349,7 +773,7 @@ export function Outpost3DViewport({
 
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.1;
+    renderer.toneMappingExposure = 1.08;
     renderer.setPixelRatio(isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, 2));
     renderer.shadowMap.enabled = !isSoftwareGl;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -359,122 +783,201 @@ export function Outpost3DViewport({
     renderer.setSize(width, height, false);
 
     const scene = new THREE.Scene();
-    const skyColor = world === 'MOON' ? 0x070b16 : 0x724024;
+    const skyColor = world === 'MOON' ? 0x050811 : 0x7a4429;
     scene.background = new THREE.Color(skyColor);
-    scene.fog = new THREE.FogExp2(skyColor, world === 'MOON' ? 0.011 : 0.018);
+    scene.fog = new THREE.FogExp2(skyColor, world === 'MOON' ? 0.0085 : 0.0155);
 
-    // Mandatory studio environment map via RoomEnvironment
     const pmremGenerator = new THREE.PMREMGenerator(renderer);
     const envTex = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
     scene.environment = envTex;
+    scene.environmentIntensity = 0.72;
     pmremGenerator.dispose();
 
-    const camera = new THREE.PerspectiveCamera(52, width / height, 0.2, 220);
+    const camera = new THREE.PerspectiveCamera(50, width / height, 0.2, 260);
     camera.position.set(0, 12, 19);
 
-    // 3-Point Warm/Cool Lighting Rig
+    // Cinematic 3-Point Space Lighting Rig (Raking Sun + Earthshine/Mars Bounce + Rim)
     const hemiLight = new THREE.HemisphereLight(
-      world === 'MOON' ? 0xcbd5e1 : 0xfdba74,
-      world === 'MOON' ? 0x1e293b : 0x431407,
-      0.85
+      world === 'MOON' ? 0x94a3b8 : 0xfdba74,
+      world === 'MOON' ? 0x0f172a : 0x3b1508,
+      world === 'MOON' ? 0.55 : 0.92
     );
     scene.add(hemiLight);
 
-    const keyLight = new THREE.DirectionalLight(world === 'MOON' ? 0xfff7ed : 0xffedd5, 2.3);
-    keyLight.position.set(22, 32, 18);
+    const keyLight = new THREE.DirectionalLight(world === 'MOON' ? 0xfffaf0 : 0xffedd5, 2.7);
+    keyLight.position.set(28, 26, 20);
     keyLight.castShadow = !isSoftwareGl;
-    keyLight.shadow.mapSize.set(1024, 1024);
+    keyLight.shadow.mapSize.set(2048, 2048);
     keyLight.shadow.camera.near = 2;
-    keyLight.shadow.camera.far = 90;
-    const d = 28;
+    keyLight.shadow.camera.far = 105;
+    const d = 30;
     keyLight.shadow.camera.left = -d;
     keyLight.shadow.camera.right = d;
     keyLight.shadow.camera.top = d;
     keyLight.shadow.camera.bottom = -d;
-    keyLight.shadow.bias = -0.0005;
-    keyLight.shadow.normalBias = 0.02;
+    keyLight.shadow.bias = -0.0004;
+    keyLight.shadow.normalBias = 0.025;
     scene.add(keyLight);
 
-    const rimLight = new THREE.DirectionalLight(0x38bdf8, 0.65);
-    rimLight.position.set(-20, 14, -22);
+    const rimLight = new THREE.DirectionalLight(world === 'MOON' ? 0x38bdf8 : 0xf97316, 0.58);
+    rimLight.position.set(-22, 12, -24);
     scene.add(rimLight);
 
-    // Track disposable resources
+    // Warm interior Command Hub beacon glow
+    const hubGlowLight = new THREE.PointLight(0x38bdf8, 1.4, 14);
+    hubGlowLight.position.set(0, 2.8, 0);
+    scene.add(hubGlowLight);
+
     const disposables: { dispose: () => void }[] = [envTex];
     const maxAniso = renderer.capabilities.getMaxAnisotropy();
 
-    // Ground Terrain
-    const groundTex = makeProceduralTerrainTexture(world);
-    groundTex.anisotropy = maxAniso;
-    disposables.push(groundTex);
+    // Shared PBR Textures
+    const regolithMaps = makeRegolithMaps(world);
+    regolithMaps.map.anisotropy = maxAniso;
+    regolithMaps.bumpMap.anisotropy = maxAniso;
+    disposables.push(regolithMaps.map, regolithMaps.bumpMap);
 
-    const groundGeo = new THREE.CircleGeometry(70, 48);
+    const kaptonMaps = makeKaptonFoilMaps();
+    kaptonMaps.map.anisotropy = maxAniso;
+    disposables.push(kaptonMaps.map, kaptonMaps.bumpMap);
+
+    const hullMaps = makeHullPlateMaps();
+    hullMaps.map.anisotropy = maxAniso;
+    disposables.push(hullMaps.map, hullMaps.bumpMap);
+
+    // Displaced Cratered Regolith Terrain + Mountain Horizon Rim
+    const terrainSegments = isSoftwareGl ? 64 : 112;
+    const groundGeo = new THREE.PlaneGeometry(175, 175, terrainSegments, terrainSegments);
+    groundGeo.rotateX(-Math.PI / 2);
+    const posAttr = groundGeo.attributes.position as THREE.BufferAttribute;
+    for (let i = 0; i < posAttr.count; i++) {
+      const vx = posAttr.getX(i);
+      const vz = posAttr.getZ(i);
+      posAttr.setY(i, sampleTerrainHeight(vx, vz, world));
+    }
+    groundGeo.computeVertexNormals();
+
     const groundMat = new THREE.MeshStandardMaterial({
-      map: groundTex,
-      roughness: 0.92,
-      metalness: 0.05
+      map: regolithMaps.map,
+      bumpMap: regolithMaps.bumpMap,
+      bumpScale: 0.24,
+      roughness: 0.94,
+      metalness: 0.04
     });
     const groundMesh = new THREE.Mesh(groundGeo, groundMat);
-    groundMesh.rotation.x = -Math.PI / 2;
     groundMesh.receiveShadow = true;
     scene.add(groundMesh);
     disposables.push(groundGeo, groundMat);
 
-    // Sky Objects: Stars + Earth (Moon) or Faint Sun/Phobos (Mars)
-    const starPositions = new Float32Array(260 * 3);
-    for (let i = 0; i < 260; i++) {
+    // Deep-Space Starfield (with multi-size stars) + Detailed Earth (Moon) or Sun Disc (Mars)
+    const starCount = isSoftwareGl ? 340 : 900;
+    const starPositions = new Float32Array(starCount * 3);
+    for (let i = 0; i < starCount; i++) {
       const theta = Math.random() * Math.PI * 2;
-      const phi = Math.random() * Math.PI * 0.42;
-      const r = 82;
+      const phi = Math.random() * Math.PI * 0.45;
+      const r = 98;
       starPositions[i * 3] = r * Math.cos(theta) * Math.cos(phi);
-      starPositions[i * 3 + 1] = 16 + r * Math.sin(phi);
+      starPositions[i * 3 + 1] = 14 + r * Math.sin(phi);
       starPositions[i * 3 + 2] = r * Math.sin(theta) * Math.cos(phi);
     }
     const starGeo = new THREE.BufferGeometry();
     starGeo.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
     const starMat = new THREE.PointsMaterial({
       color: 0xf8fafc,
-      size: world === 'MOON' ? 0.65 : 0.35,
+      size: world === 'MOON' ? 0.58 : 0.34,
       transparent: true,
-      opacity: world === 'MOON' ? 0.9 : 0.4
+      opacity: world === 'MOON' ? 0.92 : 0.35
     });
     scene.add(new THREE.Points(starGeo, starMat));
     disposables.push(starGeo, starMat);
 
     if (world === 'MOON') {
-      const earthGeo = new THREE.SphereGeometry(4.8, 24, 20);
+      const earthTex = makeEarthSphereTexture();
+      const earthGeo = new THREE.SphereGeometry(6.2, 32, 24);
       const earthMat = new THREE.MeshStandardMaterial({
-        color: 0x2563eb,
+        map: earthTex,
         emissive: 0x0ea5e9,
-        emissiveIntensity: 0.35,
-        roughness: 0.65
+        emissiveMap: earthTex,
+        emissiveIntensity: 0.42,
+        roughness: 0.55,
+        metalness: 0.05
       });
       const earthMesh = new THREE.Mesh(earthGeo, earthMat);
-      earthMesh.position.set(-28, 24, -46);
-      scene.add(earthMesh);
-      disposables.push(earthGeo, earthMat);
+      earthMesh.position.set(-34, 28, -58);
+      earthMesh.rotation.y = 0.8;
+
+      const atmoGeo = new THREE.SphereGeometry(6.55, 28, 20);
+      const atmoMat = new THREE.MeshBasicMaterial({
+        color: 0x38bdf8,
+        transparent: true,
+        opacity: 0.16,
+        side: THREE.BackSide
+      });
+      const atmoMesh = new THREE.Mesh(atmoGeo, atmoMat);
+      atmoMesh.position.copy(earthMesh.position);
+      scene.add(earthMesh, atmoMesh);
+      disposables.push(earthTex, earthGeo, earthMat, atmoGeo, atmoMat);
+    } else {
+      // Distant hazy Martian sun disc + drifting atmospheric dust motes
+      const sunHalo = new THREE.Mesh(
+        new THREE.SphereGeometry(3.6, 20, 16),
+        new THREE.MeshBasicMaterial({ color: 0xfde68a, transparent: true, opacity: 0.75 })
+      );
+      sunHalo.position.set(42, 30, -56);
+      scene.add(sunHalo);
     }
 
-    // Instanced Perimeter Rocks (Natural Outdoor Boundary)
-    const rockGeo = new THREE.DodecahedronGeometry(1.0, 0);
+    // Airborne Dust Particles (Subtle atmospheric realism on Mars)
+    let dustCloud: THREE.Points | null = null;
+    if (world === 'MARS') {
+      const dustN = isSoftwareGl ? 90 : 220;
+      const dPos = new Float32Array(dustN * 3);
+      for (let i = 0; i < dustN; i++) {
+        dPos[i * 3] = (Math.random() - 0.5) * 48;
+        dPos[i * 3 + 1] = 0.6 + Math.random() * 7.5;
+        dPos[i * 3 + 2] = (Math.random() - 0.5) * 48;
+      }
+      const dGeo = new THREE.BufferGeometry();
+      dGeo.setAttribute('position', new THREE.BufferAttribute(dPos, 3));
+      const dMat = new THREE.PointsMaterial({
+        color: 0xfdba74,
+        size: 0.16,
+        transparent: true,
+        opacity: 0.42
+      });
+      dustCloud = new THREE.Points(dGeo, dMat);
+      scene.add(dustCloud);
+      disposables.push(dGeo, dMat);
+    }
+
+    // Irregular Instanced Boulders with PBR Regolith Maps
+    const rockGeo = new THREE.DodecahedronGeometry(1.0, 1);
     const rockMat = new THREE.MeshStandardMaterial({
-      color: world === 'MOON' ? 0x64748b : 0x9a3412,
-      roughness: 0.9,
+      map: regolithMaps.map,
+      bumpMap: regolithMaps.bumpMap,
+      bumpScale: 0.15,
+      color: world === 'MOON' ? 0x94a3b8 : 0xb45309,
+      roughness: 0.92,
       metalness: 0.05
     });
-    const rockCount = 44;
+    const rockCount = 58;
     const rocks = new THREE.InstancedMesh(rockGeo, rockMat, rockCount);
     const rockColor = new THREE.Color();
     for (let i = 0; i < rockCount; i++) {
-      const angle = (i / rockCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.15;
-      const dist = 22 + Math.random() * 18;
-      const s = 0.6 + Math.random() * 1.9;
-      _dummy.position.set(Math.cos(angle) * dist, s * 0.32, Math.sin(angle) * dist);
+      const angle = (i / rockCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.22;
+      const dist = 22.5 + Math.random() * 24;
+      const rx = Math.cos(angle) * dist;
+      const rz = Math.sin(angle) * dist;
+      const s = 0.65 + Math.random() * 2.2;
+      const baseH = sampleTerrainHeight(rx, rz, world);
+      _dummy.position.set(rx, baseH + s * 0.28, rz);
       _dummy.rotation.set(Math.random() * 2, Math.random() * 3, Math.random() * 2);
-      _dummy.scale.set(s * 1.15, s * 0.72, s);
+      _dummy.scale.set(s * 1.22, s * 0.68, s);
       _dummy.updateMatrix();
       rocks.setMatrixAt(i, _dummy.matrix);
-      rockColor.setHex(world === 'MOON' ? 0x64748b : 0x9a3412).offsetHSL(0, 0, (Math.random() - 0.5) * 0.12);
+      rockColor
+        .setHex(world === 'MOON' ? 0x94a3b8 : 0xc2410c)
+        .offsetHSL(0, 0, (Math.random() - 0.5) * 0.14);
       rocks.setColorAt(i, rockColor);
     }
     rocks.computeBoundingSphere();
@@ -483,82 +986,264 @@ export function Outpost3DViewport({
     scene.add(rocks);
     disposables.push(rockGeo, rockMat);
 
-    // Metallic Walkways connecting Central Hub to 4 Outer Stations
+    // Pressurized Metal Catwalks + Conduit Pipes + Edge Beacons
     const deckTex = makeDeckTexture();
     deckTex.anisotropy = maxAniso;
     const deckMat = new THREE.MeshStandardMaterial({
       map: deckTex,
-      roughness: 0.55,
-      metalness: 0.5
+      roughness: 0.48,
+      metalness: 0.62
     });
-    disposables.push(deckTex, deckMat);
+    const pipeMat = new THREE.MeshStandardMaterial({
+      color: 0x64748b,
+      roughness: 0.3,
+      metalness: 0.85
+    });
+    disposables.push(deckTex, deckMat, pipeMat);
 
     BASE_STATIONS.forEach((st) => {
       if (st.id === 'COMMAND_BRIDGE') return;
       const [sx, , sz] = st.position;
       const len = Math.hypot(sx, sz);
-      const pathGeo = new THREE.BoxGeometry(2.3, 0.08, len);
+      const pathGeo = new THREE.BoxGeometry(2.45, 0.1, len);
       const pathMesh = new THREE.Mesh(pathGeo, deckMat);
-      pathMesh.position.set(sx / 2, 0.04, sz / 2);
+      pathMesh.position.set(sx / 2, 0.05, sz / 2);
       pathMesh.rotation.y = Math.atan2(sx, sz);
       pathMesh.receiveShadow = true;
       scene.add(pathMesh);
-      disposables.push(pathGeo);
+
+      // Side conduit pipeline beside walkway
+      const pipeGeo = new THREE.CylinderGeometry(0.08, 0.08, len * 0.72, 8);
+      pipeGeo.rotateX(Math.PI / 2);
+      const pipeMesh = new THREE.Mesh(pipeGeo, pipeMat);
+      const ang = Math.atan2(sx, sz);
+      pipeMesh.position.set(
+        sx / 2 + Math.cos(ang) * 1.38,
+        0.12,
+        sz / 2 - Math.sin(ang) * 1.38
+      );
+      pipeMesh.rotation.y = ang;
+      scene.add(pipeMesh);
+      disposables.push(pathGeo, pipeGeo);
     });
 
-    // Dynamic Visual State Handles for the 5 Composite Stations
+    // Shared Aerospace Station Materials
+    const solarTex = makeSolarCellTexture();
+    solarTex.anisotropy = maxAniso;
+    disposables.push(solarTex);
+
+    const metalBodyMat = new THREE.MeshStandardMaterial({
+      map: hullMaps.map,
+      bumpMap: hullMaps.bumpMap,
+      bumpScale: 0.03,
+      color: 0xf1f5f9,
+      roughness: 0.38,
+      metalness: 0.42
+    });
+    const kaptonMat = new THREE.MeshStandardMaterial({
+      map: kaptonMaps.map,
+      bumpMap: kaptonMaps.bumpMap,
+      bumpScale: 0.03,
+      metalness: 0.9,
+      roughness: 0.25
+    });
+    const darkMetalMat = new THREE.MeshStandardMaterial({
+      color: 0x1e293b,
+      roughness: 0.35,
+      metalness: 0.82
+    });
+    const glassDomeMat = new THREE.MeshPhysicalMaterial({
+      color: 0xe0f2fe,
+      roughness: 0.08,
+      metalness: 0.05,
+      transmission: 0.45,
+      transparent: true,
+      opacity: 0.42,
+      clearcoat: 1.0,
+      depthWrite: false
+    });
+    const trussFrameMat = new THREE.MeshBasicMaterial({
+      color: 0x64748b,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.35
+    });
+    disposables.push(metalBodyMat, kaptonMat, darkMetalMat, glassDomeMat, trussFrameMat);
+
+    // Parked 6-Wheeled Pressurized Exploration Rover near Command Hub
+    const roverGroup = new THREE.Group();
+    roverGroup.position.set(4.9, 0, 3.8);
+    roverGroup.rotation.y = -0.65;
+    const roverBody = new THREE.Mesh(new THREE.BoxGeometry(1.75, 0.85, 2.6), metalBodyMat);
+    roverBody.position.y = 0.85;
+    roverBody.castShadow = true;
+    const roverSkirt = new THREE.Mesh(new THREE.BoxGeometry(1.82, 0.28, 2.45), kaptonMat);
+    roverSkirt.position.y = 0.48;
+    const roverCab = new THREE.Mesh(new THREE.CylinderGeometry(0.65, 0.78, 0.75, 10), glassDomeMat);
+    roverCab.rotation.x = Math.PI / 2;
+    roverCab.position.set(0, 1.05, 1.12);
+    const roverMast = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 0.9, 8), darkMetalMat);
+    roverMast.position.set(0.45, 1.65, 0.85);
+    const roverCam = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.14, 0.16), metalBodyMat);
+    roverCam.position.set(0.45, 2.08, 0.92);
+    roverGroup.add(roverBody, roverSkirt, roverCab, roverMast, roverCam);
+    [-0.96, 0.96].forEach((wx) => {
+      [-0.88, 0, 0.88].forEach((wz) => {
+        const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.24, 12), darkMetalMat);
+        wheel.rotation.z = Math.PI / 2;
+        wheel.position.set(wx, 0.32, wz);
+        wheel.castShadow = true;
+        roverGroup.add(wheel);
+      });
+    });
+    scene.add(roverGroup);
+
+    // Dynamic Visual State Handles
     const stationClickMeshes: THREE.Object3D[] = [];
     const beaconMeshes = new Map<StationId, THREE.Mesh>();
     const padRingMats = new Map<StationId, THREE.MeshBasicMaterial>();
 
     let solarDustMat: THREE.MeshStandardMaterial | null = null;
     let cryoFrostMat: THREE.MeshStandardMaterial | null = null;
-    let o2Bubbles: THREE.Mesh[] = [];
+    const o2Bubbles: THREE.Mesh[] = [];
     let growLightMat: THREE.MeshStandardMaterial | null = null;
     let cropFoliageMat: THREE.MeshStandardMaterial | null = null;
     let radiatorFinMat: THREE.MeshStandardMaterial | null = null;
     let radarDishGroup: THREE.Group | null = null;
+    let strobeMat: THREE.MeshBasicMaterial | null = null;
     let forcefieldDomeMat: THREE.MeshBasicMaterial | null = null;
     let forcefieldDomeMesh: THREE.Mesh | null = null;
 
-    const solarTex = makeSolarCellTexture();
-    solarTex.anisotropy = maxAniso;
-    disposables.push(solarTex);
+    // 3D Live Hazard Particle Handles
+    const hazardDustStreaks: THREE.Mesh[] = [];
+    let hazardDustGroup: THREE.Group | null = null;
+    const frostShards: THREE.Mesh[] = [];
+    let hazardFrostGroup: THREE.Group | null = null;
+    const leakPuffs: THREE.Mesh[] = [];
+    let hazardLeakGroup: THREE.Group | null = null;
+    const co2Puffs: THREE.Mesh[] = [];
+    let hazardCo2Group: THREE.Group | null = null;
+    const sporeOrbs: THREE.Mesh[] = [];
+    let hazardSporeGroup: THREE.Group | null = null;
+    const heatEmbers: THREE.Mesh[] = [];
+    let hazardHeatGroup: THREE.Group | null = null;
+    let valveSteamMesh: THREE.Mesh | null = null;
 
-    const metalBodyMat = new THREE.MeshStandardMaterial({
-      color: 0xe2e8f0,
-      roughness: 0.35,
-      metalness: 0.6
-    });
-    const darkMetalMat = new THREE.MeshStandardMaterial({
-      color: 0x1e293b,
-      roughness: 0.4,
-      metalness: 0.75
-    });
-    const glassDomeMat = new THREE.MeshPhysicalMaterial({
-      color: 0xbae6fd,
-      roughness: 0.12,
-      metalness: 0.05,
+    // Solar Storm & Sun Burp 3D VFX (Corona Flare + Streaking Plasma Bolts + Shockwaves)
+    const stormVfxGroup = new THREE.Group();
+    stormVfxGroup.visible = false;
+    const coronaOrbMat = new THREE.MeshBasicMaterial({
+      color: 0xf59e0b,
       transparent: true,
-      opacity: 0.38,
+      opacity: 0.9
+    });
+    const coronaOrb = new THREE.Mesh(new THREE.SphereGeometry(5.5, 20, 16), coronaOrbMat);
+    coronaOrb.position.set(16, 42, -32);
+    stormVfxGroup.add(coronaOrb);
+
+    const plasmaBolts: { mesh: THREE.Mesh; speed: number; angle: number; radius: number; phase: number }[] = [];
+    const boltGeo = new THREE.CylinderGeometry(0.14, 0.35, 3.8, 6);
+    const boltMat = new THREE.MeshBasicMaterial({
+      color: 0xfbbf24,
+      transparent: true,
+      opacity: 0.92
+    });
+    for (let i = 0; i < 20; i++) {
+      const bolt = new THREE.Mesh(boltGeo, boltMat);
+      bolt.rotation.z = 0.28;
+      stormVfxGroup.add(bolt);
+      plasmaBolts.push({
+        mesh: bolt,
+        speed: 18 + (i % 5) * 4.5,
+        angle: (i / 20) * Math.PI * 2,
+        radius: 6 + (i % 4) * 4.2,
+        phase: (i * 0.43) % 1
+      });
+    }
+
+    const shockwaveMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.65,
+      side: THREE.DoubleSide
+    });
+    const shockwaveRing = new THREE.Mesh(new THREE.RingGeometry(18, 20.5, 36), shockwaveMat);
+    shockwaveRing.rotation.x = -Math.PI / 2;
+    shockwaveRing.position.y = 3.2;
+    stormVfxGroup.add(shockwaveRing);
+    scene.add(stormVfxGroup);
+    disposables.push(coronaOrb.geometry, coronaOrbMat, boltGeo, boltMat, shockwaveRing.geometry, shockwaveMat);
+
+    // Post-Decision & Station Action 3D Repair Burst Group
+    const actionVfxGroup = new THREE.Group();
+    actionVfxGroup.visible = false;
+    const actionRingMat = new THREE.MeshBasicMaterial({
+      color: 0x34d399,
+      transparent: true,
+      opacity: 0.9,
+      side: THREE.DoubleSide
+    });
+    const actionRingMesh = new THREE.Mesh(new THREE.RingGeometry(1.4, 2.2, 32), actionRingMat);
+    actionRingMesh.rotation.x = -Math.PI / 2;
+    actionVfxGroup.add(actionRingMesh);
+
+    const actionSparks: { mesh: THREE.Mesh; angle: number; speed: number }[] = [];
+    const sparkGeo = new THREE.OctahedronGeometry(0.18, 0);
+    const sparkMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.92 });
+    for (let k = 0; k < 12; k++) {
+      const spMesh = new THREE.Mesh(sparkGeo, sparkMat);
+      actionVfxGroup.add(spMesh);
+      actionSparks.push({ mesh: spMesh, angle: (k / 12) * Math.PI * 2, speed: 1.5 + (k % 3) * 0.6 });
+    }
+    scene.add(actionVfxGroup);
+    disposables.push(actionRingMesh.geometry, actionRingMat, sparkGeo, sparkMat);
+
+    let lastHandledActionNonce = 0;
+    let actionAnimRemaining = 0;
+    let autoActionStage: 'IDLE' | 'WALKING' | 'WORKING' = 'IDLE';
+    let autoActionKind: ActiveActionSequence['animKind'] = 'GADGET_DEPLOY';
+    let autoWalkTarget: THREE.Vector3 | null = null;
+    let autoLookTarget: THREE.Vector3 | null = null;
+    let autoActionBlocking = false;
+
+    // Footstep dust puffs array
+    const dustPuffs: { mesh: THREE.Mesh; life: number; maxLife: number }[] = [];
+    const puffGeo = new THREE.SphereGeometry(0.22, 8, 6);
+    const puffMat = new THREE.MeshBasicMaterial({
+      color: world === 'MOON' ? 0xcbd5e1 : 0xfdba74,
+      transparent: true,
+      opacity: 0.45,
       depthWrite: false
     });
-    disposables.push(metalBodyMat, darkMetalMat, glassDomeMat);
+    disposables.push(puffGeo, puffMat);
 
-    // Build all 5 Composite 3-12 part Station Groups
+    const spawnDustPuff = (px: number, pz: number, count = 3) => {
+      for (let i = 0; i < count; i++) {
+        const m = new THREE.Mesh(puffGeo, puffMat.clone());
+        m.position.set(
+          px + (Math.random() - 0.5) * 0.55,
+          0.16,
+          pz + (Math.random() - 0.5) * 0.55
+        );
+        m.scale.setScalar(0.6 + Math.random() * 0.7);
+        scene.add(m);
+        dustPuffs.push({ mesh: m, life: 0, maxLife: 0.55 + Math.random() * 0.25 });
+      }
+    };
+
+    // Build all 5 Highly Detailed Aerospace Stations
     BASE_STATIONS.forEach((station) => {
       const group = new THREE.Group();
       group.position.set(station.position[0], 0, station.position[2]);
 
-      // Base Landing Pad + Status Ring
-      const padGeo = new THREE.CylinderGeometry(3.5, 3.8, 0.22, 24);
+      const padGeo = new THREE.CylinderGeometry(3.6, 4.0, 0.24, 28);
       const padMesh = new THREE.Mesh(padGeo, darkMetalMat);
-      padMesh.position.y = 0.11;
+      padMesh.position.y = 0.12;
       padMesh.receiveShadow = true;
       group.add(padMesh);
       disposables.push(padGeo);
 
-      const ringGeo = new THREE.RingGeometry(3.65, 4.05, 32);
+      const ringGeo = new THREE.RingGeometry(3.75, 4.12, 36);
       const ringMat = new THREE.MeshBasicMaterial({
         color: new THREE.Color(station.accentHex),
         side: THREE.DoubleSide,
@@ -572,40 +1257,76 @@ export function Outpost3DViewport({
       padRingMats.set(station.id, ringMat);
       disposables.push(ringGeo, ringMat);
 
-      // Station-Specific Multi-Part Architecture
       if (station.id === 'COMMAND_BRIDGE') {
-        const hull = new THREE.Mesh(new THREE.CylinderGeometry(2.6, 3.1, 1.5, 8), metalBodyMat);
-        hull.position.y = 0.95;
+        // Pressurized Octagonal Command Module + Kapton Skirt + Warm Cabin Windows + Geodesic Cupola
+        const baseSkirt = new THREE.Mesh(new THREE.CylinderGeometry(3.15, 3.3, 0.52, 8), kaptonMat);
+        baseSkirt.position.y = 0.46;
+        baseSkirt.castShadow = true;
+        const hull = new THREE.Mesh(new THREE.CylinderGeometry(2.65, 3.05, 1.35, 8), metalBodyMat);
+        hull.position.y = 1.38;
         hull.castShadow = true;
-        const cupola = new THREE.Mesh(new THREE.SphereGeometry(2.1, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.5), glassDomeMat);
-        cupola.position.y = 1.7;
-        const spire = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.24, 3.2, 10), darkMetalMat);
-        spire.position.y = 3.2;
+
+        // Warm lit viewport windows around Command Hub
+        for (let w = 0; w < 4; w++) {
+          const ang = (w / 4) * Math.PI * 2 + Math.PI / 4;
+          const win = new THREE.Mesh(
+            new THREE.BoxGeometry(0.85, 0.36, 0.14),
+            new THREE.MeshBasicMaterial({ color: 0xfef3c7 })
+          );
+          win.position.set(Math.sin(ang) * 2.74, 1.45, Math.cos(ang) * 2.74);
+          win.rotation.y = ang;
+          group.add(win);
+        }
+
+        const cupola = new THREE.Mesh(
+          new THREE.SphereGeometry(2.15, 22, 14, 0, Math.PI * 2, 0, Math.PI * 0.5),
+          glassDomeMat
+        );
+        cupola.position.y = 2.02;
+        const cupolaTruss = new THREE.Mesh(
+          new THREE.IcosahedronGeometry(2.18, 1),
+          trussFrameMat
+        );
+        cupolaTruss.position.y = 2.02;
+
+        const spire = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.24, 3.4, 10), darkMetalMat);
+        spire.position.y = 3.55;
         const emitterOrb = new THREE.Mesh(
-          new THREE.OctahedronGeometry(0.45, 0),
+          new THREE.OctahedronGeometry(0.42, 1),
           new THREE.MeshStandardMaterial({
             color: 0x38bdf8,
             emissive: 0x0ea5e9,
-            emissiveIntensity: 1.4,
-            roughness: 0.2
+            emissiveIntensity: 1.5,
+            roughness: 0.15
           })
         );
-        emitterOrb.position.y = 4.9;
+        emitterOrb.position.y = 5.3;
+
+        strobeMat = new THREE.MeshBasicMaterial({ color: 0xef4444 });
+        const strobeLight = new THREE.Mesh(new THREE.SphereGeometry(0.11, 8, 8), strobeMat);
+        strobeLight.position.set(-1.7, 3.25, 1.2);
+        const strobeMast = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 1.2, 6), darkMetalMat);
+        strobeMast.position.set(-1.7, 2.65, 1.2);
 
         radarDishGroup = new THREE.Group();
-        radarDishGroup.position.set(1.5, 2.2, -1.2);
-        const dishMast = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 0.9, 8), darkMetalMat);
+        radarDishGroup.position.set(1.65, 2.4, -1.25);
+        const dishMast = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.11, 1.0, 8), darkMetalMat);
+        const dishMat = metalBodyMat.clone();
+        dishMat.side = THREE.DoubleSide;
+        disposables.push(dishMat);
         const dishBowl = new THREE.Mesh(
-          new THREE.ConeGeometry(0.7, 0.45, 16, 1, true),
-          metalBodyMat
+          new THREE.SphereGeometry(0.82, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.38),
+          dishMat
         );
-        dishBowl.position.y = 0.5;
+        dishBowl.position.y = 0.65;
         dishBowl.rotation.x = Math.PI * 0.65;
-        radarDishGroup.add(dishMast, dishBowl);
+        const feedHorn = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.05, 0.55, 6), kaptonMat);
+        feedHorn.position.set(0, 0.85, 0.4);
+        feedHorn.rotation.x = Math.PI * 0.35;
+        radarDishGroup.add(dishMast, dishBowl, feedHorn);
 
-        group.add(hull, cupola, spire, emitterOrb, radarDishGroup);
+        group.add(baseSkirt, hull, cupola, cupolaTruss, spire, emitterOrb, strobeMast, strobeLight, radarDishGroup);
 
-        // Base-wide Protective Forcefield Energy Dome
         forcefieldDomeMat = new THREE.MeshBasicMaterial({
           color: 0x38bdf8,
           transparent: true,
@@ -614,165 +1335,304 @@ export function Outpost3DViewport({
           depthWrite: false
         });
         forcefieldDomeMesh = new THREE.Mesh(
-          new THREE.SphereGeometry(22.5, 24, 14, 0, Math.PI * 2, 0, Math.PI * 0.5),
+          new THREE.IcosahedronGeometry(23.0, 2),
           forcefieldDomeMat
         );
         group.add(forcefieldDomeMesh);
       } else if (station.id === 'SOLAR_GRID') {
-        const panelMat = new THREE.MeshStandardMaterial({
+        const panelMat = new THREE.MeshPhysicalMaterial({
           map: solarTex,
-          roughness: 0.28,
-          metalness: 0.45
+          roughness: 0.18,
+          metalness: 0.52,
+          clearcoat: 0.85,
+          clearcoatRoughness: 0.12
         });
         solarDustMat = new THREE.MeshStandardMaterial({
-          color: world === 'MOON' ? 0x64748b : 0xb45309,
+          map: regolithMaps.map,
+          color: world === 'MOON' ? 0x94a3b8 : 0xb45309,
           transparent: true,
-          opacity: 0.15,
-          roughness: 0.95
+          opacity: 0.1,
+          roughness: 0.96
         });
         cryoFrostMat = new THREE.MeshStandardMaterial({
-          color: 0xf59e0b,
+          map: kaptonMaps.map,
+          bumpMap: kaptonMaps.bumpMap,
+          bumpScale: 0.02,
+          color: 0xfbbf24,
           emissive: 0xd97706,
-          emissiveIntensity: 0.5,
-          roughness: 0.3,
-          metalness: 0.6
+          emissiveIntensity: 0.35,
+          roughness: 0.32,
+          metalness: 0.78
         });
 
-        [-1.6, 1.6].forEach((offsetX) => {
-          const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.22, 2.5, 10), darkMetalMat);
-          mast.position.set(offsetX, 1.35, -0.6);
-          const wing = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.1, 2.1), panelMat);
-          wing.position.set(offsetX, 2.6, -0.6);
-          wing.rotation.x = 0.42;
+        [-1.65, 1.65].forEach((offsetX) => {
+          const plinth = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.42, 0.4, 10), darkMetalMat);
+          plinth.position.set(offsetX, 0.42, -0.7);
+          const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.18, 2.4, 10), darkMetalMat);
+          mast.position.set(offsetX, 1.55, -0.7);
+          const wing = new THREE.Mesh(new THREE.BoxGeometry(2.65, 0.1, 2.25), panelMat);
+          wing.position.set(offsetX, 2.75, -0.7);
+          wing.rotation.x = 0.44;
           wing.castShadow = true;
-          const dustSheet = new THREE.Mesh(new THREE.BoxGeometry(2.52, 0.03, 2.12), solarDustMat!);
-          dustSheet.position.set(offsetX, 2.66, -0.6);
-          dustSheet.rotation.x = 0.42;
-          group.add(mast, wing, dustSheet);
+          const backFrame = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.08, 0.4), darkMetalMat);
+          backFrame.position.set(offsetX, 2.68, -0.72);
+          backFrame.rotation.x = 0.44;
+          const dustSheet = new THREE.Mesh(new THREE.BoxGeometry(2.66, 0.03, 2.26), solarDustMat!);
+          dustSheet.position.set(offsetX, 2.82, -0.7);
+          dustSheet.rotation.x = 0.44;
+          group.add(plinth, mast, backFrame, wing, dustSheet);
         });
 
-        // 3 Cryo-Battery Storage Tanks
-        [-1.3, 0, 1.3].forEach((bx) => {
-          const cell = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 1.25, 12), cryoFrostMat!);
-          cell.position.set(bx, 0.84, 1.45);
+        // Junction Transformer Box + 3 Kapton Cryo-Battery Vessels
+        const transformer = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.85, 0.7), metalBodyMat);
+        transformer.position.set(0, 0.65, 0.2);
+        transformer.castShadow = true;
+        group.add(transformer);
+
+        [-1.35, 0, 1.35].forEach((bx) => {
+          const cell = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 1.3, 14), cryoFrostMat!);
+          cell.position.set(bx, 0.88, 1.5);
           cell.castShadow = true;
-          group.add(cell);
+          const cap = new THREE.Mesh(new THREE.SphereGeometry(0.42, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.5), darkMetalMat);
+          cap.position.set(bx, 1.53, 1.5);
+          group.add(cell, cap);
         });
-      } else if (station.id === 'LIFE_SUPPORT') {
-        const tankBody = new THREE.Mesh(
-          new THREE.CylinderGeometry(1.15, 1.15, 2.6, 18),
-          glassDomeMat
-        );
-        tankBody.position.set(-0.9, 1.55, 0);
-        const waterCore = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.95, 0.95, 2.1, 16),
-          new THREE.MeshStandardMaterial({
-            color: 0x0ea5e9,
-            emissive: 0x0284c7,
-            emissiveIntensity: 0.45,
-            transparent: true,
-            opacity: 0.65,
-            roughness: 0.15
-          })
-        );
-        waterCore.position.set(-0.9, 1.32, 0);
 
-        for (let b = 0; b < 5; b++) {
-          const bubble = new THREE.Mesh(
-            new THREE.SphereGeometry(0.13, 10, 8),
-            new THREE.MeshBasicMaterial({ color: 0xe0f2fe })
-          );
-          bubble.position.set(-0.9 + (b - 2) * 0.2, 0.5 + b * 0.45, (b % 2) * 0.25);
-          o2Bubbles.push(bubble);
-          group.add(bubble);
+        // Dust Storm Streaks around Solar Panels
+        hazardDustGroup = new THREE.Group();
+        const dustStreakGeo = new THREE.BoxGeometry(1.8, 0.08, 0.08);
+        const dustStreakMat = new THREE.MeshBasicMaterial({
+          color: world === 'MOON' ? 0xcbd5e1 : 0xf59e0b,
+          transparent: true,
+          opacity: 0.72
+        });
+        for (let d = 0; d < 8; d++) {
+          const streak = new THREE.Mesh(dustStreakGeo, dustStreakMat);
+          streak.position.set(-2.5 + (d % 4) * 1.4, 1.2 + (d % 3) * 0.85, -1.2 + (d % 2) * 1.4);
+          hazardDustStreaks.push(streak);
+          hazardDustGroup.add(streak);
         }
+        hazardDustGroup.visible = false;
+        group.add(hazardDustGroup);
 
-        const scrubberBox = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.9, 1.7), metalBodyMat);
-        scrubberBox.position.set(1.2, 1.15, -0.2);
+        // Orbiting Icy Frost Shards around Cryo-Batteries
+        hazardFrostGroup = new THREE.Group();
+        const frostGeo = new THREE.OctahedronGeometry(0.22, 0);
+        const frostMat = new THREE.MeshBasicMaterial({ color: 0x7dd3fc, transparent: true, opacity: 0.88 });
+        for (let f = 0; f < 6; f++) {
+          const shard = new THREE.Mesh(frostGeo, frostMat);
+          shard.position.set(Math.cos((f / 6) * Math.PI * 2) * 1.8, 1.35, 1.5 + Math.sin((f / 6) * Math.PI * 2) * 0.9);
+          frostShards.push(shard);
+          hazardFrostGroup.add(shard);
+        }
+        hazardFrostGroup.visible = false;
+        group.add(hazardFrostGroup);
+        disposables.push(dustStreakGeo, dustStreakMat, frostGeo, frostMat);
+      } else if (station.id === 'LIFE_SUPPORT') {
+        // Twin Borosilicate Electrolysis Columns + Steel Manifolds + Pressurized Airlock Module
+        [-1.35, -0.45].forEach((tx, idx) => {
+          const colFrame = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.62, 2.55, 18), glassDomeMat);
+          colFrame.position.set(tx, 1.5, -0.1);
+          const waterCore = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.5, 0.5, 2.1, 16),
+            new THREE.MeshStandardMaterial({
+              color: 0x0ea5e9,
+              emissive: 0x0284c7,
+              emissiveIntensity: 0.45,
+              transparent: true,
+              opacity: 0.65,
+              roughness: 0.12
+            })
+          );
+          waterCore.position.set(tx, 1.34, -0.1);
+          const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.66, 0.66, 0.2, 16), darkMetalMat);
+          cap.position.set(tx, 2.82, -0.1);
+          group.add(colFrame, waterCore, cap);
+
+          for (let b = 0; b < 4; b++) {
+            const bubble = new THREE.Mesh(
+              new THREE.SphereGeometry(0.09, 8, 6),
+              new THREE.MeshBasicMaterial({ color: 0xe0f2fe })
+            );
+            bubble.position.set(tx + (b % 2 === 0 ? -0.14 : 0.14), 0.55 + (b + idx) * 0.42, -0.1);
+            o2Bubbles.push(bubble);
+            group.add(bubble);
+          }
+        });
+
+        const scrubberBox = new THREE.Mesh(new THREE.BoxGeometry(1.75, 2.0, 1.85), metalBodyMat);
+        scrubberBox.position.set(1.2, 1.2, -0.15);
         scrubberBox.castShadow = true;
-        const airlockRing = new THREE.Mesh(new THREE.TorusGeometry(0.75, 0.14, 10, 20), darkMetalMat);
-        airlockRing.position.set(1.2, 1.25, 0.72);
+        const foilBelt = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.45, 1.9), kaptonMat);
+        foilBelt.position.set(1.2, 0.6, -0.15);
+        const airlockRing = new THREE.Mesh(new THREE.TorusGeometry(0.72, 0.13, 10, 22), darkMetalMat);
+        airlockRing.position.set(1.2, 1.28, 0.8);
+        const hatchDoor = new THREE.Mesh(new THREE.CylinderGeometry(0.64, 0.64, 0.12, 18), metalBodyMat);
+        hatchDoor.rotation.x = Math.PI / 2;
+        hatchDoor.position.set(1.2, 1.28, 0.78);
 
-        group.add(tankBody, waterCore, scrubberBox, airlockRing);
+        // Hull Micro-Leak Escaping White Air Jet Plume
+        hazardLeakGroup = new THREE.Group();
+        hazardLeakGroup.position.set(1.35, 1.35, 0.92);
+        const leakGeo = new THREE.SphereGeometry(0.18, 8, 6);
+        const leakMat = new THREE.MeshBasicMaterial({ color: 0xe0f2fe, transparent: true, opacity: 0.78 });
+        for (let l = 0; l < 6; l++) {
+          const lp = new THREE.Mesh(leakGeo, leakMat);
+          lp.position.z = l * 0.45;
+          leakPuffs.push(lp);
+          hazardLeakGroup.add(lp);
+        }
+        hazardLeakGroup.visible = false;
+
+        // Saturated Scrubber Rising CO2 Gas Puffs
+        hazardCo2Group = new THREE.Group();
+        hazardCo2Group.position.set(1.2, 2.35, -0.15);
+        const co2Geo = new THREE.SphereGeometry(0.24, 8, 6);
+        const co2Mat = new THREE.MeshBasicMaterial({ color: 0xfacc15, transparent: true, opacity: 0.65 });
+        for (let c = 0; c < 5; c++) {
+          const cp = new THREE.Mesh(co2Geo, co2Mat);
+          cp.position.set(((c % 3) - 1) * 0.35, c * 0.42, ((c % 2) - 0.5) * 0.3);
+          co2Puffs.push(cp);
+          hazardCo2Group.add(cp);
+        }
+        hazardCo2Group.visible = false;
+        disposables.push(leakGeo, leakMat, co2Geo, co2Mat);
+
+        group.add(scrubberBox, foilBelt, airlockRing, hatchDoor, hazardLeakGroup, hazardCo2Group);
       } else if (station.id === 'HYDROPONICS') {
         const dome = new THREE.Mesh(
-          new THREE.SphereGeometry(2.75, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.52),
+          new THREE.SphereGeometry(2.9, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.52),
           glassDomeMat
         );
         dome.position.y = 0.22;
+        const domeTruss = new THREE.Mesh(
+          new THREE.IcosahedronGeometry(2.93, 1),
+          trussFrameMat
+        );
+        domeTruss.position.y = 0.22;
+
         growLightMat = new THREE.MeshStandardMaterial({
           color: 0xf472b6,
           emissive: 0xec4899,
-          emissiveIntensity: 1.3
+          emissiveIntensity: 1.25
         });
         cropFoliageMat = new THREE.MeshStandardMaterial({
           color: 0x10b981,
-          roughness: 0.65
+          roughness: 0.72
         });
 
-        const lightBar = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.14, 0.45), growLightMat);
-        lightBar.position.set(0, 2.25, 0);
+        const lightBar = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.14, 0.45), growLightMat);
+        lightBar.position.set(0, 2.35, 0);
 
-        [-1.1, 0, 1.1].forEach((cz) => {
-          const planter = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.35, 0.65), darkMetalMat);
-          planter.position.set(0, 0.42, cz);
-          const crops = new THREE.Mesh(new THREE.BoxGeometry(2.75, 0.42, 0.48), cropFoliageMat!);
-          crops.position.set(0, 0.76, cz);
-          group.add(planter, crops);
+        [-1.15, 0, 1.15].forEach((cz) => {
+          const planter = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.38, 0.66), darkMetalMat);
+          planter.position.set(0, 0.44, cz);
+          group.add(planter);
+          // Clustered leafy crop heads along planter trough
+          for (let lx = -1.2; lx <= 1.21; lx += 0.48) {
+            const plant = new THREE.Mesh(new THREE.DodecahedronGeometry(0.24, 1), cropFoliageMat!);
+            plant.position.set(lx, 0.78, cz);
+            plant.scale.set(1.0, 0.85, 1.0);
+            group.add(plant);
+          }
         });
 
-        group.add(dome, lightBar);
+        // Floating Bio-Contamination Fungus Spores inside Dome
+        hazardSporeGroup = new THREE.Group();
+        const sporeGeo = new THREE.SphereGeometry(0.14, 8, 6);
+        const sporeMat = new THREE.MeshBasicMaterial({ color: 0xa3e635, transparent: true, opacity: 0.82 });
+        for (let s = 0; s < 8; s++) {
+          const sp = new THREE.Mesh(sporeGeo, sporeMat);
+          sp.position.set(Math.cos(s * 0.9) * 1.4, 1.0 + (s % 3) * 0.45, Math.sin(s * 1.1) * 1.3);
+          sporeOrbs.push(sp);
+          hazardSporeGroup.add(sp);
+        }
+        hazardSporeGroup.visible = false;
+        disposables.push(sporeGeo, sporeMat);
+
+        group.add(dome, domeTruss, lightBar, hazardSporeGroup);
       } else if (station.id === 'THERMAL_WORKSHOP') {
         radiatorFinMat = new THREE.MeshStandardMaterial({
-          color: 0x475569,
+          color: 0x64748b,
           emissive: 0x000000,
-          roughness: 0.32,
-          metalness: 0.8
+          roughness: 0.28,
+          metalness: 0.84
         });
-        const hubCore = new THREE.Mesh(new THREE.BoxGeometry(1.9, 1.7, 1.9), metalBodyMat);
-        hubCore.position.set(-0.7, 1.05, 0);
+        const hubCore = new THREE.Mesh(new THREE.BoxGeometry(1.95, 1.65, 1.95), metalBodyMat);
+        hubCore.position.set(-0.75, 1.05, 0);
         hubCore.castShadow = true;
+        const foilWrap = new THREE.Mesh(new THREE.BoxGeometry(2.02, 0.55, 2.02), kaptonMat);
+        foilWrap.position.set(-0.75, 0.52, 0);
 
-        // 3 External Vacuum Radiator Wings
-        [-0.7, 0, 0.7].forEach((rz) => {
-          const fin = new THREE.Mesh(new THREE.BoxGeometry(2.3, 2.8, 0.12), radiatorFinMat!);
-          fin.position.set(1.25, 1.7, rz);
-          fin.rotation.z = -0.25;
+        // 4 Articulated External Vacuum Radiator Wings on Truss Boom
+        const boom = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 2.6, 8), darkMetalMat);
+        boom.rotation.z = Math.PI / 2;
+        boom.position.set(0.85, 1.95, 0);
+        group.add(boom);
+
+        [-0.95, -0.32, 0.32, 0.95].forEach((rz) => {
+          const fin = new THREE.Mesh(new THREE.BoxGeometry(2.1, 2.9, 0.1), radiatorFinMat!);
+          fin.position.set(1.35, 1.85, rz);
+          fin.rotation.z = -0.22;
           fin.castShadow = true;
           group.add(fin);
         });
 
-        // 3D Printer Workbench
-        const printerFrame = new THREE.Mesh(new THREE.BoxGeometry(1.1, 1.2, 1.0), darkMetalMat);
-        printerFrame.position.set(-0.7, 2.45, 0);
+        // 3D Printer CNC Frame + Glowing Cyan Filament Spool
+        const printerFrame = new THREE.Mesh(new THREE.BoxGeometry(1.15, 1.2, 1.05), darkMetalMat);
+        printerFrame.position.set(-0.75, 2.48, 0);
         const spool = new THREE.Mesh(
-          new THREE.TorusGeometry(0.28, 0.09, 8, 16),
-          new THREE.MeshStandardMaterial({ color: 0x38bdf8, roughness: 0.4 })
+          new THREE.TorusGeometry(0.28, 0.09, 10, 18),
+          new THREE.MeshStandardMaterial({
+            color: 0x38bdf8,
+            emissive: 0x0284c7,
+            emissiveIntensity: 0.45,
+            roughness: 0.35
+          })
         );
-        spool.position.set(-0.7, 3.25, 0);
-        group.add(hubCore, printerFrame, spool);
+        spool.position.set(-0.75, 3.28, 0);
+
+        // Thermal Overheat Embers + Jury-Rig Valve Steam Warning
+        hazardHeatGroup = new THREE.Group();
+        const emberGeo = new THREE.SphereGeometry(0.13, 6, 6);
+        const emberMat = new THREE.MeshBasicMaterial({ color: 0xf97316, transparent: true, opacity: 0.85 });
+        for (let e = 0; e < 7; e++) {
+          const emb = new THREE.Mesh(emberGeo, emberMat);
+          emb.position.set(0.6 + (e % 3) * 0.55, 1.4 + e * 0.3, ((e % 2) - 0.5) * 1.1);
+          heatEmbers.push(emb);
+          hazardHeatGroup.add(emb);
+        }
+        hazardHeatGroup.visible = false;
+
+        valveSteamMesh = new THREE.Mesh(
+          new THREE.TorusGeometry(0.65, 0.08, 8, 18),
+          new THREE.MeshBasicMaterial({ color: 0xfbbf24, transparent: true, opacity: 0.8 })
+        );
+        valveSteamMesh.position.set(-0.75, 1.35, 1.08);
+        valveSteamMesh.visible = false;
+        disposables.push(emberGeo, emberMat, valveSteamMesh.geometry, valveSteamMesh.material as THREE.Material);
+
+        group.add(hubCore, foilWrap, printerFrame, spool, hazardHeatGroup, valveSteamMesh);
       }
 
-      // Floating Overhead Beacon Diamond
       const beacon = new THREE.Mesh(
-        new THREE.OctahedronGeometry(0.42, 0),
+        new THREE.OctahedronGeometry(0.38, 0),
         new THREE.MeshStandardMaterial({
           color: new THREE.Color(station.accentHex),
           emissive: new THREE.Color(station.accentHex),
-          emissiveIntensity: 0.85,
-          roughness: 0.2
+          emissiveIntensity: 0.95,
+          roughness: 0.18
         })
       );
-      beacon.position.y = 4.35;
+      beacon.position.y = 4.65;
       group.add(beacon);
       beaconMeshes.set(station.id, beacon);
 
-      // Invisible clickable proxy cylinder for fast raycasting
       const proxy = new THREE.Mesh(
-        new THREE.CylinderGeometry(3.6, 3.6, 4.5, 12),
+        new THREE.CylinderGeometry(3.7, 3.7, 4.8, 12),
         new THREE.MeshBasicMaterial({ visible: false })
       );
-      proxy.position.y = 2.25;
+      proxy.position.y = 2.4;
       proxy.userData.stationId = station.id;
       group.add(proxy);
       stationClickMeshes.push(proxy);
@@ -780,13 +1640,13 @@ export function Outpost3DViewport({
       scene.add(group);
     });
 
-    // Target Waypoint Ring for Click-to-Walk
-    const waypointGeo = new THREE.RingGeometry(0.45, 0.68, 24);
+    // Click-to-Walk Waypoint Ring
+    const waypointGeo = new THREE.RingGeometry(0.45, 0.68, 28);
     const waypointMat = new THREE.MeshBasicMaterial({
       color: 0x38bdf8,
       side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.9
+      opacity: 0.92
     });
     const waypointMesh = new THREE.Mesh(waypointGeo, waypointMat);
     waypointMesh.rotation.x = -Math.PI / 2;
@@ -795,8 +1655,8 @@ export function Outpost3DViewport({
     scene.add(waypointMesh);
     disposables.push(waypointGeo, waypointMat);
 
-    // Astronaut Player
-    const hero = createAstronautHero(world);
+    // High-Detail EMU Astronaut Player
+    const hero = createAstronautHero(world, hullMaps, kaptonMaps);
     hero.root.position.set(0, 0, 4.5);
     scene.add(hero.root);
 
@@ -805,38 +1665,34 @@ export function Outpost3DViewport({
     let playerVy = 0;
     let isGrounded = true;
     let walkTime = 0;
+    let stepAccum = 0;
     let walkTarget: THREE.Vector3 | null = null;
     let pendingStationOpen: StationId | null = null;
     let lastHandledJumpNonce = 0;
     let lastNearestSent: StationId | null = null;
 
-    // Camera Orbit State
     let camYaw = 0;
-    let camPitch = 0.48;
-    let camDistance = 15.5;
+    let camPitch = 0.46;
+    let camDistance = 15.2;
     let isDraggingCam = false;
     let dragStartX = 0;
     let dragStartY = 0;
     let pointerMovedDist = 0;
-    let camPosCurrent = new THREE.Vector3(0, 11, 20);
-    let camLookCurrent = new THREE.Vector3(0, 1.5, 4.5);
+    const camPosCurrent = new THREE.Vector3(0, 11, 20);
+    const camLookCurrent = new THREE.Vector3(0, 1.5, 4.5);
 
     const triggerJump = () => {
       if (!isGrounded) return;
-      playerVy = world === 'MOON' ? 6.6 : 8.2; // Moon floaty vs Mars snappier arc
+      playerVy = world === 'MOON' ? 6.6 : 8.2;
       isGrounded = false;
+      spawnDustPuff(hero.root.position.x, hero.root.position.z, 4);
       callbacksRef.current.onFootstepJump();
       soundEngine.playButtonClick('tab');
       haptics.tick();
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (
-        e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement
-      ) {
-        return;
-      }
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       keys[e.code] = true;
 
       if (e.code === 'Space' && phaseRef.current === 'ACTIVE_SHIFT') {
@@ -894,7 +1750,6 @@ export function Outpost3DViewport({
           if (dist < 4.8) {
             callbacksRef.current.onSelectStation(hitId);
           } else {
-            // Walk straight to station edge and open it on arrival
             _vec3A.set(st.position[0], 0, st.position[2]);
             _vec3B.subVectors(hero.root.position, _vec3A).setY(0);
             if (_vec3B.lengthSq() < 0.01) _vec3B.set(0, 0, 1);
@@ -949,7 +1804,6 @@ export function Outpost3DViewport({
     });
     resizeObserver.observe(container);
 
-    // Pre-compile shaders cleanly on GPUs
     if (!isSoftwareGl) {
       renderer.compile(scene, camera);
     }
@@ -975,7 +1829,7 @@ export function Outpost3DViewport({
       frameId = window.setTimeout(poll, 5);
     }
 
-    const gravityAccel = world === 'MOON' ? 9.5 : 17.2; // Visual game-scaled 0.16g vs 0.38g!
+    const gravityAccel = world === 'MOON' ? 9.5 : 17.2;
 
     const tick = () => {
       if (disposed) return;
@@ -984,7 +1838,6 @@ export function Outpost3DViewport({
       const sys = systemsRef.current;
       const pwr = powerRef.current;
 
-      // External jump button trigger
       if (externalJumpTriggerRef.current !== lastHandledJumpNonce) {
         lastHandledJumpNonce = externalJumpTriggerRef.current;
         if (phaseRef.current === 'ACTIVE_SHIFT') {
@@ -992,7 +1845,6 @@ export function Outpost3DViewport({
         }
       }
 
-      // 1. Player Movement (WASD / Arrows + Dpad + Click-to-Walk)
       let moveX = dpadRef.current.x;
       let moveZ = dpadRef.current.z;
       if (keys['KeyW'] || keys['ArrowUp']) moveZ -= 1;
@@ -1012,7 +1864,6 @@ export function Outpost3DViewport({
 
       if (isWalkingEnabled) {
         if (hasManualInput) {
-          // Camera-relative movement direction
           const sinY = Math.sin(camYaw);
           const cosY = Math.cos(camYaw);
           const worldDx = moveX * cosY + moveZ * sinY;
@@ -1021,8 +1872,7 @@ export function Outpost3DViewport({
           const speed = keys['ShiftLeft'] || keys['ShiftRight'] ? 10.5 : 7.2;
           hero.root.position.x += _vec3A.x * speed * dt;
           hero.root.position.z += _vec3A.z * speed * dt;
-          const targetRot = Math.atan2(_vec3A.x, _vec3A.z);
-          hero.root.rotation.y = targetRot;
+          hero.root.rotation.y = Math.atan2(_vec3A.x, _vec3A.z);
           movingSpeed = speed;
         } else if (walkTarget) {
           _vec3A.subVectors(walkTarget, hero.root.position).setY(0);
@@ -1045,7 +1895,6 @@ export function Outpost3DViewport({
           }
         }
 
-        // Clamp astronaut inside outer boulder perimeter
         const radial = Math.hypot(hero.root.position.x, hero.root.position.z);
         if (radial > 20.5) {
           const scale = 20.5 / radial;
@@ -1054,7 +1903,7 @@ export function Outpost3DViewport({
         }
       }
 
-      // Gravity Jump Physics (0.16g Moon vs 0.38g Mars)
+      // Gravity Jump Physics + Touchdown Dust Plume
       if (!isGrounded || playerVy > 0) {
         playerVy -= gravityAccel * dt;
         hero.root.position.y += playerVy * dt;
@@ -1062,28 +1911,222 @@ export function Outpost3DViewport({
           hero.root.position.y = 0;
           playerVy = 0;
           isGrounded = true;
+          spawnDustPuff(hero.root.position.x, hero.root.position.z, 5);
         }
       }
 
-      // Astronaut Limb Walk Animation
-      if (movingSpeed > 0.1 && isGrounded) {
-        walkTime += dt * movingSpeed * 1.45;
-        const swing = Math.sin(walkTime) * 0.55;
-        hero.leftLegPivot.rotation.x = swing;
-        hero.rightLegPivot.rotation.x = -swing;
-        hero.leftArmPivot.rotation.x = -swing * 0.8;
-        hero.rightArmPivot.rotation.x = swing * 0.8;
-      } else {
-        hero.leftLegPivot.rotation.x = THREE.MathUtils.damp(hero.leftLegPivot.rotation.x, 0, 10, dt);
-        hero.rightLegPivot.rotation.x = THREE.MathUtils.damp(hero.rightLegPivot.rotation.x, 0, 10, dt);
-        hero.leftArmPivot.rotation.x = THREE.MathUtils.damp(hero.leftArmPivot.rotation.x, 0, 10, dt);
-        hero.rightArmPivot.rotation.x = THREE.MathUtils.damp(hero.rightArmPivot.rotation.x, 0, 10, dt);
+      // Trigger Post-Decision / Station Repair: Astronaut Walks to Fixation Site & Performs Animation
+      const currentAct = activeActionRef.current;
+      if (currentAct && currentAct.nonce !== lastHandledActionNonce) {
+        lastHandledActionNonce = currentAct.nonce;
+        autoActionKind = currentAct.animKind;
+        autoActionBlocking = currentAct.blocking;
+
+        const targetSt = BASE_STATIONS.find((s) => s.id === currentAct.stationId);
+        if (targetSt) {
+          _vec3A.set(targetSt.position[0], 0, targetSt.position[2]);
+          const radialLen = Math.hypot(_vec3A.x, _vec3A.z);
+          if (radialLen > 1) {
+            _vec3B.copy(_vec3A).normalize().multiplyScalar(-3.45);
+          } else {
+            _vec3B.set(0, 0, 3.6);
+          }
+          autoWalkTarget = _vec3A.clone().add(_vec3B);
+          autoLookTarget = _vec3A.clone();
+          actionVfxGroup.position.set(targetSt.position[0], 0.25, targetSt.position[2]);
+          waypointMesh.position.set(autoWalkTarget.x, 0.06, autoWalkTarget.z);
+          waypointMesh.visible = true;
+        } else {
+          autoWalkTarget = hero.root.position.clone();
+          autoLookTarget = hero.root.position.clone().add(new THREE.Vector3(0, 0, -2));
+          actionVfxGroup.position.set(hero.root.position.x, 0.25, hero.root.position.z);
+        }
+
+        const hex =
+          currentAct.tone === 'amber'
+            ? 0xfbbf24
+            : currentAct.tone === 'rose'
+            ? 0xf43f5e
+            : currentAct.tone === 'sky'
+            ? 0x38bdf8
+            : 0x34d399;
+        actionRingMat.color.setHex(hex);
+        sparkMat.color.setHex(hex);
+        hero.toolTipMat.color.setHex(hex);
+        hero.toolBeamMat.color.setHex(hex);
+        hero.auraMat.color.setHex(hex);
+        hero.sparkMat.color.setHex(hex);
+
+        const distToSite = hero.root.position.distanceTo(autoWalkTarget);
+        if (distToSite > 0.55) {
+          autoActionStage = 'WALKING';
+          actionAnimRemaining = 0;
+          callbacksRef.current.onActionStageChange?.('WALKING');
+        } else {
+          autoActionStage = 'WORKING';
+          actionAnimRemaining = 1.75;
+          waypointMesh.visible = false;
+          callbacksRef.current.onActionStageChange?.('WORKING');
+        }
+      } else if (!currentAct && autoActionStage !== 'IDLE') {
+        autoActionStage = 'IDLE';
+        actionAnimRemaining = 0;
+        autoWalkTarget = null;
       }
+
+      if (autoActionStage === 'WALKING' && autoWalkTarget) {
+        _vec3A.subVectors(autoWalkTarget, hero.root.position).setY(0);
+        const dist = _vec3A.length();
+        if (dist < 0.45) {
+          autoActionStage = 'WORKING';
+          actionAnimRemaining = 1.75;
+          waypointMesh.visible = false;
+          callbacksRef.current.onActionStageChange?.('WORKING');
+          if (autoLookTarget) {
+            hero.root.rotation.y = Math.atan2(
+              autoLookTarget.x - hero.root.position.x,
+              autoLookTarget.z - hero.root.position.z
+            );
+          }
+        } else {
+          _vec3A.normalize();
+          const autoSpeed = 10.2;
+          hero.root.position.x += _vec3A.x * autoSpeed * dt;
+          hero.root.position.z += _vec3A.z * autoSpeed * dt;
+          hero.root.rotation.y = Math.atan2(_vec3A.x, _vec3A.z);
+          movingSpeed = autoSpeed;
+        }
+      }
+
+      if (autoActionStage === 'WORKING') {
+        if (autoLookTarget) {
+          hero.root.rotation.y = Math.atan2(
+            autoLookTarget.x - hero.root.position.x,
+            autoLookTarget.z - hero.root.position.z
+          );
+        }
+        actionAnimRemaining = Math.max(0, actionAnimRemaining - dt);
+        const progress = 1 - actionAnimRemaining / 1.75;
+
+        // Character-Attached Tool, Sparks & Aura
+        hero.toolGroup.visible = true;
+        hero.toolBeam.scale.setScalar(0.85 + Math.sin(elapsed * 22) * 0.25);
+        hero.toolBeamMat.opacity = 0.55 + Math.sin(elapsed * 20) * 0.3;
+        hero.heroAuraRing.visible = true;
+        hero.heroAuraRing.scale.setScalar(0.9 + Math.sin(elapsed * 8) * 0.16);
+        hero.heroAuraRing.rotation.z += dt * 2.8;
+        hero.sparksGroup.visible = true;
+        hero.heroSparks.forEach((sp, idx) => {
+          const ang = elapsed * 4.2 + (idx / 6) * Math.PI * 2;
+          sp.position.set(Math.cos(ang) * 0.95, 1.15 + Math.sin(elapsed * 6 + idx) * 0.42, Math.sin(ang) * 0.95);
+          sp.rotation.y += dt * 6;
+        });
+
+        // Station Ring + Rising Sparks
+        actionVfxGroup.visible = true;
+        actionRingMesh.position.y = progress * 3.8;
+        actionRingMesh.scale.setScalar(0.8 + progress * 1.45);
+        actionRingMat.opacity = (1 - progress) * 0.9;
+        actionSparks.forEach((sp) => {
+          const r = 1.2 + progress * 1.8;
+          const a = sp.angle + elapsed * 3.5;
+          sp.mesh.position.set(Math.cos(a) * r, 0.5 + progress * 4.2, Math.sin(a) * r);
+          sp.mesh.rotation.y += dt * 5;
+        });
+        sparkMat.opacity = 1 - progress;
+
+        // Character Body & Arm Repair Animation
+        hero.upperBodyGroup.rotation.x = 0.18 + Math.sin(elapsed * 10) * 0.06;
+        hero.upperBodyGroup.position.y = Math.sin(elapsed * 14) * 0.035;
+        hero.leftLegPivot.rotation.x = THREE.MathUtils.damp(hero.leftLegPivot.rotation.x, 0, 12, dt);
+        hero.rightLegPivot.rotation.x = THREE.MathUtils.damp(hero.rightLegPivot.rotation.x, 0, 12, dt);
+
+        if (
+          autoActionKind === 'HEAT_WARM' ||
+          autoActionKind === 'SHIELD_CHARGE' ||
+          autoActionKind === 'GADGET_DEPLOY'
+        ) {
+          hero.leftArmPivot.rotation.x = -1.95 + Math.sin(elapsed * 13) * 0.25;
+          hero.rightArmPivot.rotation.x = -1.95 + Math.sin(elapsed * 13) * 0.25;
+          hero.rightArmPivot.rotation.z = 0;
+        } else if (
+          autoActionKind === 'WELD_SEAL' ||
+          autoActionKind === 'PRINT_BUILD' ||
+          autoActionKind === 'SCRUB_CLEAN' ||
+          autoActionKind === 'UV_CLEAN'
+        ) {
+          hero.rightArmPivot.rotation.x = -1.48 + Math.sin(elapsed * 20) * 0.34;
+          hero.rightArmPivot.rotation.z = -0.18 + Math.cos(elapsed * 14) * 0.32;
+          hero.leftArmPivot.rotation.x = -0.95 + Math.sin(elapsed * 9) * 0.14;
+        } else {
+          hero.leftArmPivot.rotation.x = -1.35 + Math.sin(elapsed * 15) * 0.38;
+          hero.rightArmPivot.rotation.x = -1.35 - Math.sin(elapsed * 15) * 0.38;
+          hero.rightArmPivot.rotation.z = 0;
+        }
+
+        if (actionAnimRemaining <= 0) {
+          autoActionStage = 'IDLE';
+          actionVfxGroup.visible = false;
+          hero.toolGroup.visible = false;
+          hero.heroAuraRing.visible = false;
+          hero.sparksGroup.visible = false;
+          callbacksRef.current.onActionComplete?.();
+        }
+      } else {
+        actionVfxGroup.visible = false;
+        hero.toolGroup.visible = false;
+        hero.heroAuraRing.visible = false;
+        hero.sparksGroup.visible = false;
+        hero.upperBodyGroup.rotation.x = THREE.MathUtils.damp(hero.upperBodyGroup.rotation.x, 0, 10, dt);
+        hero.upperBodyGroup.position.y = THREE.MathUtils.damp(hero.upperBodyGroup.position.y, 0, 10, dt);
+        hero.rightArmPivot.rotation.z = THREE.MathUtils.damp(hero.rightArmPivot.rotation.z, 0, 10, dt);
+
+        if (movingSpeed > 0.1 && isGrounded) {
+          walkTime += dt * movingSpeed * 1.45;
+          stepAccum += dt * movingSpeed;
+          if (stepAccum > 2.4) {
+            stepAccum = 0;
+            spawnDustPuff(hero.root.position.x, hero.root.position.z, 1);
+          }
+          const swing = Math.sin(walkTime) * 0.55;
+          hero.leftLegPivot.rotation.x = swing;
+          hero.rightLegPivot.rotation.x = -swing;
+          hero.leftArmPivot.rotation.x = -swing * 0.8;
+          hero.rightArmPivot.rotation.x = swing * 0.8;
+        } else {
+          hero.leftLegPivot.rotation.x = THREE.MathUtils.damp(hero.leftLegPivot.rotation.x, 0, 10, dt);
+          hero.rightLegPivot.rotation.x = THREE.MathUtils.damp(hero.rightLegPivot.rotation.x, 0, 10, dt);
+          hero.leftArmPivot.rotation.x = THREE.MathUtils.damp(hero.leftArmPivot.rotation.x, 0, 10, dt);
+          hero.rightArmPivot.rotation.x = THREE.MathUtils.damp(hero.rightArmPivot.rotation.x, 0, 10, dt);
+        }
+      }
+
+      // Update Dust Puffs
+      for (let i = dustPuffs.length - 1; i >= 0; i--) {
+        const p = dustPuffs[i];
+        p.life += dt;
+        const t = p.life / p.maxLife;
+        if (t >= 1) {
+          scene.remove(p.mesh);
+          (p.mesh.material as THREE.Material).dispose();
+          dustPuffs.splice(i, 1);
+        } else {
+          p.mesh.position.y += dt * 0.65;
+          p.mesh.scale.setScalar(0.6 + t * 1.4);
+          (p.mesh.material as THREE.MeshBasicMaterial).opacity = 0.42 * (1 - t);
+        }
+      }
+
+      // Drift Mars atmospheric dust gently
+      if (dustCloud) {
+        dustCloud.rotation.y += dt * 0.03;
+      }
+
       const shadowScale = THREE.MathUtils.clamp(1 - hero.root.position.y * 0.12, 0.35, 1);
       hero.shadowDisc.scale.setScalar(shadowScale);
       hero.shadowDisc.position.y = 0.03 - hero.root.position.y;
 
-      // 2. Proximity Station Detection
+      // Proximity Station Detection
       let closestId: StationId | null = null;
       let closestDist = 999;
       for (const st of BASE_STATIONS) {
@@ -1101,7 +2144,7 @@ export function Outpost3DViewport({
         callbacksRef.current.onNearestStationChange(closestId, closestDist);
       }
 
-      // 3. Real-Time Visual Coupling to Space Physics Telemetry
+      // Real-Time Visual Coupling
       if (solarDustMat) {
         solarDustMat.opacity = THREE.MathUtils.clamp(sys.dustCoatPct / 80, 0.02, 0.88);
       }
@@ -1110,7 +2153,7 @@ export function Outpost3DViewport({
           cryoFrostMat.color.setHex(0x60a5fa);
           cryoFrostMat.emissive.setHex(0x3b82f6);
         } else {
-          cryoFrostMat.color.setHex(0xf59e0b);
+          cryoFrostMat.color.setHex(0xfbbf24);
           cryoFrostMat.emissive.setHex(0xd97706);
         }
       }
@@ -1123,7 +2166,7 @@ export function Outpost3DViewport({
       if (radiatorFinMat) {
         if (sys.cabinTempC >= 34 || sys.radiatorHealthPct < 80) {
           radiatorFinMat.emissive.setHex(0xea580c);
-          radiatorFinMat.emissiveIntensity = 0.65 + Math.sin(elapsed * 5) * 0.25;
+          radiatorFinMat.emissiveIntensity = 0.72 + Math.sin(elapsed * 5) * 0.25;
         } else {
           radiatorFinMat.emissive.setHex(0x000000);
           radiatorFinMat.emissiveIntensity = 0;
@@ -1132,31 +2175,120 @@ export function Outpost3DViewport({
       if (radarDishGroup) {
         radarDishGroup.rotation.y += dt * (sys.radarScrambled ? 4.2 : 0.7);
       }
+      if (strobeMat) {
+        strobeMat.color.setHex(Math.sin(elapsed * 4) > 0.65 ? 0xff4444 : 0x7f1d1d);
+      }
       if (forcefieldDomeMat && forcefieldDomeMesh) {
         const isStorm = phaseRef.current === 'STORM_SIM';
         const shieldOn = pwr.shieldingKw > 0 || sys.sunBlanketActive || isStorm;
         forcefieldDomeMesh.visible = shieldOn;
+        forcefieldDomeMesh.rotation.y += dt * (isStorm ? 0.55 : 0.06);
         forcefieldDomeMat.color.setHex(
           sys.sunBlanketActive ? 0xfbbf24 : isStorm ? 0x38bdf8 : 0x0ea5e9
         );
         forcefieldDomeMat.opacity = isStorm
-          ? 0.28 + Math.sin(elapsed * 8) * 0.08
+          ? 0.32 + Math.sin(elapsed * 10) * 0.1
           : THREE.MathUtils.clamp(pwr.shieldingKw / 250, 0.03, 0.14);
       }
 
-      // Animate O2 bubbles in Electrolysis column
+      // Live 3D Solar Storm & Sun Burp VFX
+      const isStormActive = phaseRef.current === 'STORM_SIM';
+      stormVfxGroup.visible = isStormActive;
+      if (isStormActive) {
+        const sev = flareSeverityRef.current;
+        const orbHex = sev === 'EXTREME' ? 0xf43f5e : sev === 'MODERATE' ? 0xf97316 : 0xfde047;
+        coronaOrbMat.color.setHex(orbHex);
+        boltMat.color.setHex(sev === 'EXTREME' ? 0xfda4af : 0xfef08a);
+        const orbScale = (sev === 'EXTREME' ? 1.45 : sev === 'MODERATE' ? 1.15 : 0.85) + Math.sin(elapsed * 9) * 0.14;
+        coronaOrb.scale.setScalar(orbScale);
+
+        plasmaBolts.forEach((b) => {
+          b.phase = (b.phase + dt * (sev === 'EXTREME' ? 1.6 : 1.15)) % 1;
+          const yPos = 42 * (1 - b.phase) + 12 * b.phase;
+          const xPos = Math.cos(b.angle + elapsed * 0.3) * b.radius * (0.4 + b.phase * 0.7);
+          const zPos = Math.sin(b.angle + elapsed * 0.3) * b.radius * (0.4 + b.phase * 0.7);
+          b.mesh.position.set(xPos, yPos, zPos);
+        });
+
+        const ringCycle = (elapsed * 1.8) % 1;
+        shockwaveRing.scale.setScalar(0.35 + ringCycle * 1.15);
+        shockwaveMat.color.setHex(sys.sunBlanketActive ? 0xfbbf24 : 0x38bdf8);
+        shockwaveMat.opacity = (1 - ringCycle) * 0.72;
+      }
+
+      // Ongoing Station Hazard 3D Particle Animations
+      if (hazardDustGroup) {
+        hazardDustGroup.visible = sys.dustCoatPct >= 15;
+        if (hazardDustGroup.visible) {
+          hazardDustStreaks.forEach((s, i) => {
+            s.position.x = ((elapsed * 3.5 + i * 0.85) % 5.2) - 2.6;
+          });
+        }
+      }
+      if (hazardFrostGroup) {
+        hazardFrostGroup.visible = sys.frozenCells > 0;
+        if (hazardFrostGroup.visible) {
+          hazardFrostGroup.rotation.y += dt * 1.3;
+          frostShards.forEach((sh, i) => {
+            sh.rotation.x += dt * 2.1;
+            sh.position.y = 1.25 + Math.sin(elapsed * 3 + i) * 0.25;
+          });
+        }
+      }
+      if (hazardLeakGroup) {
+        hazardLeakGroup.visible = sys.hullLeakActive;
+        if (hazardLeakGroup.visible) {
+          leakPuffs.forEach((lp, i) => {
+            const c = ((elapsed * 2.2 + i * 0.22) % 1);
+            lp.position.z = c * 2.8;
+            lp.scale.setScalar(0.45 + c * 1.25);
+          });
+        }
+      }
+      if (hazardCo2Group) {
+        hazardCo2Group.visible = sys.scrubberSaturated || sys.co2Ppm >= 1600;
+        if (hazardCo2Group.visible) {
+          co2Puffs.forEach((cp, i) => {
+            const c = ((elapsed * 0.8 + i * 0.25) % 1);
+            cp.position.y = c * 2.2;
+            cp.scale.setScalar(0.6 + c * 0.9);
+          });
+        }
+      }
+      if (hazardSporeGroup) {
+        hazardSporeGroup.visible = sys.bioContamActive;
+        if (hazardSporeGroup.visible) {
+          sporeOrbs.forEach((sp, i) => {
+            sp.position.y = 0.9 + ((elapsed * 0.6 + i * 0.3) % 1.4);
+          });
+        }
+      }
+      if (hazardHeatGroup) {
+        hazardHeatGroup.visible = sys.radiatorHealthPct < 85 || sys.cabinTempC >= 34;
+        if (hazardHeatGroup.visible) {
+          heatEmbers.forEach((emb, i) => {
+            emb.position.y = 1.2 + ((elapsed * 1.5 + i * 0.35) % 2.4);
+          });
+        }
+      }
+      if (valveSteamMesh) {
+        valveSteamMesh.visible = sys.juryRigValveActive;
+        if (valveSteamMesh.visible) {
+          valveSteamMesh.scale.setScalar(0.85 + Math.sin(elapsed * 7) * 0.2);
+        }
+      }
+
       o2Bubbles.forEach((bub, idx) => {
         bub.position.y += dt * (0.4 + pwr.electrolysisKw * 0.015);
         if (bub.position.y > 2.35) bub.position.y = 0.45 + (idx % 2) * 0.12;
       });
 
-      // Animate Station Beacons & Pad Highlight Rings
       const emStation = emergencyStationRef.current;
       beaconMeshes.forEach((mesh, id) => {
         const isEmergency = id === emStation;
         const isNear = id === closestId;
         mesh.rotation.y += dt * (isEmergency ? 4.5 : 1.4);
-        mesh.position.y = 4.35 + Math.sin(elapsed * (isEmergency ? 6 : 2.5)) * (isEmergency ? 0.35 : 0.14);
+        mesh.position.y = 4.65 + Math.sin(elapsed * (isEmergency ? 6 : 2.5)) * (isEmergency ? 0.35 : 0.14);
         mesh.scale.setScalar(isEmergency ? 1.45 : isNear ? 1.2 : 1.0);
         const bMat = mesh.material as THREE.MeshStandardMaterial;
         const ringM = padRingMats.get(id);
@@ -1183,8 +2315,7 @@ export function Outpost3DViewport({
         waypointMesh.rotation.z += dt * 2.5;
       }
 
-      // 4. Smooth Damped Third-Person Camera (or scenic orbit on Onboarding/Debrief)
-      if (phaseRef.current === 'ACTIVE_SHIFT') {
+      if (phaseRef.current === 'ACTIVE_SHIFT' || phaseRef.current === 'ACTION_EXECUTION') {
         const targetCamX = hero.root.position.x + Math.sin(camYaw) * Math.cos(camPitch) * camDistance;
         const targetCamY = hero.root.position.y + 1.8 + Math.sin(camPitch) * camDistance;
         const targetCamZ = hero.root.position.z + Math.cos(camYaw) * Math.cos(camPitch) * camDistance;
@@ -1197,15 +2328,13 @@ export function Outpost3DViewport({
         camLookCurrent.y = THREE.MathUtils.damp(camLookCurrent.y, hero.root.position.y + 1.4, 9, dt);
         camLookCurrent.z = THREE.MathUtils.damp(camLookCurrent.z, hero.root.position.z, 9, dt);
       } else {
-        const orbitAngle = elapsed * 0.14;
-        const orbitX = Math.sin(orbitAngle) * 23;
+        const orbitAngle = elapsed * (isStormActive ? 0.35 : 0.14);
+        const shakeX = isStormActive ? Math.sin(elapsed * 32) * 0.22 : 0;
+        const shakeY = isStormActive ? Math.cos(elapsed * 27) * 0.16 : 0;
+        const orbitX = Math.sin(orbitAngle) * 23 + shakeX;
         const orbitZ = Math.cos(orbitAngle) * 23;
-        camPosCurrent.x = THREE.MathUtils.damp(camPosCurrent.x, orbitX, 3.5, dt);
-        camPosCurrent.y = THREE.MathUtils.damp(camPosCurrent.y, 13.5, 3.5, dt);
-        camPosCurrent.z = THREE.MathUtils.damp(camPosCurrent.z, orbitZ, 3.5, dt);
-        camLookCurrent.x = THREE.MathUtils.damp(camLookCurrent.x, 0, 4, dt);
-        camLookCurrent.y = THREE.MathUtils.damp(camLookCurrent.y, 1.5, 4, dt);
-        camLookCurrent.z = THREE.MathUtils.damp(camLookCurrent.z, 0, 4, dt);
+        camPosCurrent.set(orbitX, 13.5 + shakeY, orbitZ);
+        camLookCurrent.set(0, 1.5, 0);
       }
 
       camera.position.copy(camPosCurrent);
@@ -1216,16 +2345,20 @@ export function Outpost3DViewport({
       if (isSoftwareGl) {
         afterDraw(tick);
       } else {
-        frameId = requestAnimationFrame(tick);
+        frameId = window.requestAnimationFrame(tick);
       }
     };
 
-    tick();
+    if (isSoftwareGl) {
+      tick();
+    } else {
+      frameId = window.requestAnimationFrame(tick);
+    }
 
     return () => {
       disposed = true;
-      cancelAnimationFrame(frameId);
-      clearTimeout(frameId);
+      window.cancelAnimationFrame(frameId);
+      window.clearTimeout(frameId);
       resizeObserver.disconnect();
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
@@ -1234,6 +2367,7 @@ export function Outpost3DViewport({
       window.removeEventListener('pointerup', handlePointerUp);
       canvas.removeEventListener('wheel', handleWheel);
       canvas.removeEventListener('webglcontextlost', handleContextLost);
+      dustPuffs.forEach((p) => (p.mesh.material as THREE.Material).dispose());
       disposables.forEach((dObj) => dObj.dispose());
       renderer.dispose();
     };
@@ -1241,35 +2375,15 @@ export function Outpost3DViewport({
 
   if (webglFallback) {
     return (
-      <div className="w-full h-full bg-slate-950 text-slate-200 flex flex-col items-center justify-center p-8 text-center">
-        <h2 className="font-display text-2xl font-bold mb-2">
-          {world === 'MOON' ? 'Moon Outpost Alpha (0.16g)' : 'Mars Outpost Base (0.38g)'}
-        </h2>
-        <p className="text-sm text-slate-400 max-w-md mb-6">
-          Interactive 3D view is unavailable on this browser, but all 5 base stations and emergency
-          physics controls remain active below.
+      <div className="w-full h-full bg-slate-950 flex flex-col items-center justify-center p-6 text-center text-slate-200">
+        <div className="text-lg font-extrabold mb-2">3D Viewport Fallback Active</div>
+        <p className="text-sm text-slate-400 max-w-md">
+          Hardware 3D context paused cleanly—you can still use all station controls and power
+          sliders from the bottom dock!
         </p>
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 max-w-3xl">
-          {BASE_STATIONS.map((st) => (
-            <button
-              key={st.id}
-              type="button"
-              onClick={() => onSelectStation(st.id)}
-              className="p-3 rounded-xl bg-slate-900 border border-slate-700 hover:border-sky-400 text-xs font-bold cursor-pointer"
-            >
-              {st.shortName}
-            </button>
-          ))}
-        </div>
       </div>
     );
   }
 
-  return (
-    <div
-      ref={mountRef}
-      className="w-full h-full select-none cursor-grab active:cursor-grabbing"
-      aria-label="Interactive 3D Moon and Mars Base Walking Viewport"
-    />
-  );
+  return <div ref={mountRef} className="w-full h-full cursor-grab active:cursor-grabbing" />;
 }

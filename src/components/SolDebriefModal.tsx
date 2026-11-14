@@ -15,6 +15,7 @@ import {
 import { MissionTraceEntry, SolDebriefData } from '../types/game';
 import { getFlareNickname } from '../utils/physicsSimulation';
 import { radioVoiceEngine } from '../utils/radioVoiceEngine';
+import { IncidentVisualCard } from './IncidentVisualCard';
 import { MissionHistoryPanel } from './MissionHistoryPanel';
 
 interface SolDebriefModalProps {
@@ -135,6 +136,24 @@ export function SolDebriefModal({
               </>
             )}
           </div>
+        </div>
+
+        {/* Storm Impact Visual Recap */}
+        <div className="mb-3.5">
+          <IncidentVisualCard
+            id="storm-outcome"
+            compact
+            stormSeverity={flareEvent.severityLevel}
+            shieldHeld={debrief.shieldHeld}
+            sunBlanketSaved={debrief.sunBlanketSaved}
+            customCaption={
+              debrief.sunBlanketSaved
+                ? `Your Sun-Bounce Blanket reflected the ${stormNickname} safely off the habitat dome!`
+                : debrief.shieldHeld
+                ? `Forcefield (${debrief.effectiveShieldPower}⚡) blocked the ${stormNickname} (${flareEvent.requiredShieldKw}⚡ needed)!`
+                : `${stormNickname} (${flareEvent.requiredShieldKw}⚡) slipped past ${debrief.effectiveShieldPower}⚡ Forcefield (-${debrief.radiationDamage}% impact)!`
+            }
+          />
         </div>
 
         {/* 4 Physics Metric Tiles */}

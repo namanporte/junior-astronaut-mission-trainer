@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Sparkles } from 'lucide-react';
 import { BottomControlDock } from './components/BottomControlDock';
+import {
+  DecisionActionOverlay,
+  resolveOptionActionAnim,
+  resolveStationRepairAnim
+} from './components/DecisionActionOverlay';
 import { DilemmaModal } from './components/DilemmaModal';
 import { DonkiModal } from './components/DonkiModal';
 import { EndGameModal } from './components/EndGameModal';
@@ -8,6 +13,7 @@ import { HudTopBar } from './components/HudTopBar';
 import { OnboardingModal } from './components/OnboardingModal';
 import { DpadVector, Outpost3DViewport } from './components/Outpost3DViewport';
 import { SolDebriefModal } from './components/SolDebriefModal';
+import { StormImpactOverlay } from './components/StormImpactOverlay';
 import { StoryCutsceneOverlay } from './components/StoryCutsceneOverlay';
 import { SurpriseEmergencyModal } from './components/SurpriseEmergencyModal';
 import {
@@ -28,6 +34,7 @@ import {
   NASA_ARCHIVE_FALLBACK_EVENTS
 } from './services/nasaDonkiService';
 import {
+  ActiveActionSequence,
   BackpackInventory,
   BaseSystemsState,
   CommsTarget,
@@ -94,6 +101,9 @@ export function App() {
   const [surpriseDeck, setSurpriseDeck] = useState<SurpriseEmergency[]>([]);
   const [firedSurpriseIds, setFiredSurpriseIds] = useState<string[]>([]);
   const [activeEmergency, setActiveEmergency] = useState<SurpriseEmergency | null>(null);
+  const [activeAction, setActiveAction] = useState<ActiveActionSequence | null>(null);
+  const [actionStage, setActionStage] = useState<'WALKING' | 'WORKING'>('WALKING');
+  const actionNonceRef = useRef(0);
 
   const [nearestStation, setNearestStation] = useState<StationId | null>(null);
   const [nearestDistance, setNearestDistance] = useState(99);
@@ -196,6 +206,16 @@ export function App() {
     const t = window.setTimeout(() => setBannerText(null), 5000);
     return () => window.clearTimeout(t);
   }, [bannerText]);
+
+  // Safety fallback for post-decision & repair Action Execution animations
+  useEffect(() => {
+    if (!activeAction) return;
+    const t = window.setTimeout(() => {
+      setActiveAction(null);
+      setPhase((p) => (p === 'ACTION_EXECUTION' ? 'ACTIVE_SHIFT' : p));
+    }, 4800);
+    return () => window.clearTimeout(t);
+  }, [activeAction]);
 
   const checkFatalThresholds = useCallback(
     (next: BaseSystemsState): string | null => {
@@ -480,6 +500,18 @@ export function App() {
     }
   };
 
+  const triggerActionSequence = useCallback(
+    (payload: Omit<ActiveActionSequence, 'nonce'>) => {
+      actionNonceRef.current += 1;
+      setActionStage('WALKING');
+      setActiveAction({ ...payload, nonce: actionNonceRef.current });
+      if (payload.blocking) {
+        setPhase('ACTION_EXECUTION');
+      }
+    },
+    []
+  );
+
   const handleChooseMorningDilemma = (opt: DilemmaOption) => {
     const result = opt.apply({ systems, backpack, world });
     setSystems(result.nextSystems);
@@ -496,7 +528,19 @@ export function App() {
     setActiveEmergency(null);
     setShiftSecondsLeft(SHIFT_DURATION_SECONDS);
     showToast(result.bannerText);
-    setPhase('ACTIVE_SHIFT');
+
+    const anim = resolveOptionActionAnim(opt.id);
+    soundEngine.playSolSurvivedChime();
+    triggerActionSequence({
+      title: opt.label,
+      actionLabel: anim.actionLabel,
+      resultBanner: result.bannerText,
+      stationId: morningDilemma.stationHint,
+      visualId: morningDilemma.id,
+      animKind: anim.animKind,
+      tone: opt.tone,
+      blocking: true
+    });
   };
 
   const handleChooseSurpriseOption = (opt: SurpriseOption) => {
@@ -513,56 +557,101 @@ export function App() {
     }
     setSolSurpriseDecisions((prev) => [...prev, res.choiceTag]);
     showToast(res.bannerText);
+
+    const anim = resolveOptionActionAnim(opt.id);
+    if (anim.animKind === 'SHORTCUT_WARN') soundEngine.playBudgetLimitBuzz();
+    else soundEngine.playSolSurvivedChime();
+
+    triggerActionSequence({
+      title: opt.label,
+      actionLabel: anim.actionLabel,
+      resultBanner: res.bannerText,
+      stationId: activeEmergency.stationId,
+      visualId: activeEmergency.id,
+      animKind: anim.animKind,
+      tone: opt.tone,
+      blocking: true
+    });
     setActiveEmergency(null);
-    setPhase('ACTIVE_SHIFT');
   };
 
   const handleStationRepair = (actionId: string) => {
-    setSystems((prev) => {
-      const next = { ...prev };
-      if (actionId === 'SCRUB_DUST' && prev.dustCoatPct > 0) {
-        next.dustCoatPct = 0;
-        next.waterO2Pct = Math.max(0, prev.waterO2Pct - 6);
-        showToast('Solar panels scrubbed mirror-clean! Full sunlight power restored.');
-      } else if (actionId === 'THAW_BATTERY' && prev.frozenCells > 0) {
-        next.frozenCells = prev.frozenCells - 1;
-        next.tempGridDeltaKw = prev.tempGridDeltaKw - 10;
-        showToast('Cryo-battery cell thawed (+15⚡ max grid restored)!');
-      } else if (actionId === 'SEAL_LEAK' && prev.hullLeakActive) {
-        next.hullLeakActive = false;
-        next.tempGridDeltaKw = prev.tempGridDeltaKw - 8;
-        showToast('Airlock micro-leak welded airtight!');
-      } else if (actionId === 'BAKEOUT_CO2') {
-        next.scrubberSaturated = false;
-        next.co2Ppm = 520;
-        next.cabinTempC = prev.cabinTempC + 3;
-        next.tempGridDeltaKw = prev.tempGridDeltaKw - 12;
-        showToast('CO2 scrubbers baked out! Crisp air restored to 520 ppm.');
-      } else if (actionId === 'STERILIZE_MOLD' && prev.bioContamActive) {
-        next.bioContamActive = false;
-        next.cropsPct = Math.max(0, prev.cropsPct - 6);
-        showToast('Bio-Dome sterilized with UV light—Space Veggies safe!');
-      } else if (actionId === 'WASH_PERCHLORATE' && prev.perchlorateLock) {
-        next.perchlorateLock = false;
-        next.waterO2Pct = Math.max(0, prev.waterO2Pct - 8);
-        next.cropsPct = Math.min(100, prev.cropsPct + 8);
-        showToast('Toxic Martian perchlorates washed away (+8% Crops boost)!');
-      } else if (actionId === 'REPAIR_RADIATOR') {
-        next.radiatorHealthPct = 100;
-        next.cabinTempC = Math.max(20, prev.cabinTempC - 8);
-        next.waterO2Pct = Math.max(0, prev.waterO2Pct - 5);
-        next.tempGridDeltaKw = prev.tempGridDeltaKw - 5;
-        showToast('External vacuum radiators repaired—habitat cooling steadily!');
-      } else if (actionId === 'PRINT_VALVE' && prev.juryRigValveActive && backpack.filamentSpool > 0) {
-        next.juryRigValveActive = false;
-        setBackpack((bp) => ({ ...bp, filamentSpool: bp.filamentSpool - 1 }));
-        showToast('3D-printed precision valve installed! Supply gap hazard resolved.');
-      } else if (actionId === 'OVERBOOST_SHIELD') {
-        next.tempGridDeltaKw = prev.tempGridDeltaKw - 10;
-        next.nextSolShieldBonusKw = prev.nextSolShieldBonusKw + 10;
-        showToast('Forcefield spire overcharged (+10⚡ bonus shield today)!');
-      }
-      return next;
+    let resultMsg = '';
+    let didAct = false;
+    const next = { ...systems };
+
+    if (actionId === 'SCRUB_DUST' && systems.dustCoatPct > 0) {
+      next.dustCoatPct = 0;
+      next.waterO2Pct = Math.max(0, systems.waterO2Pct - 6);
+      resultMsg = 'Solar panels scrubbed mirror-clean! Full sunlight power restored.';
+      didAct = true;
+    } else if (actionId === 'THAW_BATTERY' && systems.frozenCells > 0) {
+      next.frozenCells = systems.frozenCells - 1;
+      next.tempGridDeltaKw = systems.tempGridDeltaKw - 10;
+      resultMsg = 'Cryo-battery cell thawed (+15⚡ max grid restored)!';
+      didAct = true;
+    } else if (actionId === 'SEAL_LEAK' && systems.hullLeakActive) {
+      next.hullLeakActive = false;
+      next.tempGridDeltaKw = systems.tempGridDeltaKw - 8;
+      resultMsg = 'Airlock micro-leak welded airtight!';
+      didAct = true;
+    } else if (actionId === 'BAKEOUT_CO2') {
+      next.scrubberSaturated = false;
+      next.co2Ppm = 520;
+      next.cabinTempC = systems.cabinTempC + 3;
+      next.tempGridDeltaKw = systems.tempGridDeltaKw - 12;
+      resultMsg = 'CO2 scrubbers baked out! Crisp air restored to 520 ppm.';
+      didAct = true;
+    } else if (actionId === 'STERILIZE_MOLD' && systems.bioContamActive) {
+      next.bioContamActive = false;
+      next.cropsPct = Math.max(0, systems.cropsPct - 6);
+      resultMsg = 'Bio-Dome sterilized with UV light—Space Veggies safe!';
+      didAct = true;
+    } else if (actionId === 'WASH_PERCHLORATE' && systems.perchlorateLock) {
+      next.perchlorateLock = false;
+      next.waterO2Pct = Math.max(0, systems.waterO2Pct - 8);
+      next.cropsPct = Math.min(100, systems.cropsPct + 8);
+      resultMsg = 'Toxic Martian perchlorates washed away (+8% Crops boost)!';
+      didAct = true;
+    } else if (actionId === 'REPAIR_RADIATOR') {
+      next.radiatorHealthPct = 100;
+      next.cabinTempC = Math.max(20, systems.cabinTempC - 8);
+      next.waterO2Pct = Math.max(0, systems.waterO2Pct - 5);
+      next.tempGridDeltaKw = systems.tempGridDeltaKw - 5;
+      resultMsg = 'External vacuum radiators repaired—habitat cooling steadily!';
+      didAct = true;
+    } else if (
+      actionId === 'PRINT_VALVE' &&
+      systems.juryRigValveActive &&
+      backpack.filamentSpool > 0
+    ) {
+      next.juryRigValveActive = false;
+      setBackpack((bp) => ({ ...bp, filamentSpool: bp.filamentSpool - 1 }));
+      resultMsg = '3D-printed precision valve installed! Supply gap hazard resolved.';
+      didAct = true;
+    } else if (actionId === 'OVERBOOST_SHIELD') {
+      next.tempGridDeltaKw = systems.tempGridDeltaKw - 10;
+      next.nextSolShieldBonusKw = systems.nextSolShieldBonusKw + 10;
+      resultMsg = 'Forcefield spire overcharged (+10⚡ bonus shield today)!';
+      didAct = true;
+    }
+
+    if (!didAct) return;
+
+    setSystems(next);
+    showToast(resultMsg);
+
+    const repairMeta = resolveStationRepairAnim(actionId);
+    soundEngine.playSolSurvivedChime();
+    triggerActionSequence({
+      title: repairMeta.title,
+      actionLabel: repairMeta.actionLabel,
+      resultBanner: resultMsg,
+      stationId: repairMeta.stationId,
+      visualId: repairMeta.visualId,
+      animKind: repairMeta.animKind,
+      tone: repairMeta.tone,
+      blocking: false
     });
   };
 
@@ -620,11 +709,33 @@ export function App() {
     if (item === 'megaBattery') {
       setSystems((s) => ({ ...s, tempGridDeltaKw: s.tempGridDeltaKw + 25 }));
       setSolGadgetsUsed((g) => [...g, 'Mega Battery (+25⚡)']);
-      showToast('Mega Battery plugged in! +25⚡ grid power added for this shift!');
+      const msg = 'Mega Battery plugged in! +25⚡ grid power added for this shift!';
+      showToast(msg);
+      triggerActionSequence({
+        title: 'Plugging In Mega Battery',
+        actionLabel: 'Coupling +25⚡ auxiliary surge bank to main bus...',
+        resultBanner: msg,
+        stationId: 'SOLAR_GRID',
+        visualId: 'grid-overload',
+        animKind: 'GADGET_DEPLOY',
+        tone: 'amber',
+        blocking: false
+      });
     } else if (item === 'sunBlanket') {
       setSystems((s) => ({ ...s, sunBlanketActive: true }));
       setSolGadgetsUsed((g) => [...g, 'Sun-Bounce Blanket']);
-      showToast('Sun-Bounce Blanket deployed across the base dome!');
+      const msg = 'Sun-Bounce Blanket deployed across the base dome!';
+      showToast(msg);
+      triggerActionSequence({
+        title: 'Deploying Sun-Bounce Blanket',
+        actionLabel: 'Unfurling gold reflective armor canopy over habitat dome...',
+        resultBanner: msg,
+        stationId: 'COMMAND_BRIDGE',
+        visualId: 'precharge-shield-coils',
+        animKind: 'SHIELD_CHARGE',
+        tone: 'sky',
+        blocking: false
+      });
     } else if (item === 'waterCartridge') {
       setSystems((s) => ({
         ...s,
@@ -632,7 +743,18 @@ export function App() {
         co2Ppm: Math.max(480, s.co2Ppm - 400)
       }));
       setSolGadgetsUsed((g) => [...g, 'Water/O2 Tank']);
-      showToast('Reserve Water/O2 Tank connected (+25% Air & Water)!');
+      const msg = 'Reserve Water/O2 Tank connected (+25% Air & Water)!';
+      showToast(msg);
+      triggerActionSequence({
+        title: 'Connecting Reserve H2O/O2 Tank',
+        actionLabel: 'Pumping fresh reserve water into O2 electrolysis cells...',
+        resultBanner: msg,
+        stationId: 'LIFE_SUPPORT',
+        visualId: 'water-oxygen-trap',
+        animKind: 'WATER_FLUSH',
+        tone: 'emerald',
+        blocking: false
+      });
     }
     soundEngine.playPowerUpTick(50);
   };
@@ -739,6 +861,8 @@ export function App() {
         phase={phase}
         systems={systems}
         power={power}
+        upcomingFlareSeverity={upcomingFlare?.severityLevel}
+        activeAction={activeAction}
         activeEmergencyStation={activeEmergency?.stationId ?? null}
         nearestStation={nearestStation}
         jumpNonce={jumpNonce}
@@ -749,9 +873,26 @@ export function App() {
         }}
         onSelectStation={handleSelectStationIn3D}
         onFootstepJump={() => soundEngine.playSliderTick(35)}
+        onActionStageChange={(stage) => setActionStage(stage)}
+        onActionComplete={() => {
+          setActiveAction(null);
+          setPhase((p) => (p === 'ACTION_EXECUTION' ? 'ACTIVE_SHIFT' : p));
+        }}
       />
 
-      {/* CO2 Cognitive Haze / Thermal Rim Physics Vignettes */}
+      {/* POST-DECISION & REPAIR ANIMATED ACTION EXECUTION */}
+      {activeAction && (
+        <DecisionActionOverlay
+          action={activeAction}
+          stage={actionStage}
+          onContinue={() => {
+            setActiveAction(null);
+            setPhase((p) => (p === 'ACTION_EXECUTION' ? 'ACTIVE_SHIFT' : p));
+          }}
+        />
+      )}
+
+      {/* CO2 Cognitive Haze / Thermal / Dust / Leak Physics VFX Overlays */}
       {highCo2 && (
         <div
           aria-hidden="true"
@@ -768,6 +909,41 @@ export function App() {
         <div
           aria-hidden="true"
           className="pointer-events-none fixed inset-0 z-10 border-8 border-cyan-400/40 bg-cyan-950/12"
+        />
+      )}
+      {phase === 'ACTIVE_SHIFT' && systems.dustCoatPct >= 25 && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none fixed inset-0 z-10 overflow-hidden"
+        >
+          {[14, 34, 58, 76].map((topPct, idx) => (
+            <div
+              key={idx}
+              className="animate-dust-wind absolute h-1 rounded-full bg-gradient-to-r from-amber-300/0 via-amber-400/45 to-amber-500/0"
+              style={{
+                top: `${topPct}%`,
+                left: `${5 + idx * 12}%`,
+                width: '180px',
+                animationDelay: `${idx * 0.4}s`
+              }}
+            />
+          ))}
+        </div>
+      )}
+      {phase === 'ACTIVE_SHIFT' && systems.hullLeakActive && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none fixed inset-0 z-10 border-4 border-sky-400/45 animate-pulse"
+        />
+      )}
+
+      {/* LIVE STORM & SUN BURP ANIMATED CLASH CARD */}
+      {phase === 'STORM_SIM' && upcomingFlare && (
+        <StormImpactOverlay
+          sol={sol}
+          flareEvent={upcomingFlare}
+          effectiveShieldKw={power.shieldingKw + systems.nextSolShieldBonusKw}
+          sunBlanketActive={systems.sunBlanketActive}
         />
       )}
 

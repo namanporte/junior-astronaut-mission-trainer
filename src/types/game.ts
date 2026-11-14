@@ -2,12 +2,38 @@ export type GamePhase =
   | 'ONBOARDING'
   | 'STORY_INTRO'
   | 'MORNING_DILEMMA'
+  | 'ACTION_EXECUTION'
   | 'ACTIVE_SHIFT'
   | 'SURPRISE_DECISION'
   | 'STORM_SIM'
   | 'DEBRIEF'
   | 'VICTORY'
   | 'GAME_OVER';
+
+export type ActionAnimKind =
+  | 'SCRUB_CLEAN'
+  | 'HEAT_WARM'
+  | 'SHIELD_CHARGE'
+  | 'WATER_FLUSH'
+  | 'WELD_SEAL'
+  | 'UV_CLEAN'
+  | 'PRINT_BUILD'
+  | 'COOL_VENT'
+  | 'ROVER_FETCH'
+  | 'SHORTCUT_WARN'
+  | 'GADGET_DEPLOY';
+
+export interface ActiveActionSequence {
+  nonce: number;
+  title: string;
+  actionLabel: string;
+  resultBanner: string;
+  stationId: StationId;
+  visualId: string;
+  animKind: ActionAnimKind;
+  tone: 'emerald' | 'amber' | 'sky' | 'rose';
+  blocking: boolean;
+}
 
 export type WorldBody = 'MOON' | 'MARS';
 export type DifficultyMode = 'CADET' | 'COMMANDER' | 'SANDBOX';
