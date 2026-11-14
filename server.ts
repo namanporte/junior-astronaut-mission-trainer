@@ -2,13 +2,13 @@ import 'dotenv/config';
 import express, { Request, Response } from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT) || 3000;
-const MODEL_NAME = 'gemini-2.5-flash';
+const MODEL_NAME = 'gemini-4-hydrogen';
 
 function getGeminiClient(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -66,7 +66,7 @@ Outcome: Life Support changed by ${lifeSupportChange >= 0 ? `+${lifeSupportChang
         contents: userPrompt,
         config: {
           systemInstruction,
-          temperature: 0.7
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
         }
       });
 
@@ -107,7 +107,7 @@ Current sliders: Life Support (O2, Heat & Hydroponics) ${currentSliders?.lifeSup
         contents: userPrompt,
         config: {
           systemInstruction,
-          temperature: 0.7
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
         }
       });
 
@@ -147,7 +147,7 @@ Average power priorities: Life Support (O2/Heat/Food) ${avgLifeSupport} kW, Radi
         contents: userPrompt,
         config: {
           systemInstruction,
-          temperature: 0.7
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
         }
       });
 

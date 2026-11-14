@@ -25,7 +25,7 @@ export interface CapcomResponse {
   isAiGenerated: boolean;
 }
 
-const CAPCOM_TIMEOUT_MS = 3000;
+const CAPCOM_TIMEOUT_MS = 4500;
 
 async function postCapcomEndpoint(
   url: string,
