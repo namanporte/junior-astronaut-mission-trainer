@@ -26,9 +26,8 @@ export function getGravityLabel(world: WorldBody): string {
   return world === 'MOON' ? '0.16g (Moon)' : '0.38g (Mars)';
 }
 
-export function getTotalSolsForMode(world: WorldBody, mode: DifficultyMode): number {
-  if (world === 'MARS') return mode === 'COMMANDER' ? 7 : 6;
-  return mode === 'COMMANDER' ? 6 : 5;
+export function getTotalSolsForMode(_world: WorldBody, _mode: DifficultyMode): number {
+  return 7;
 }
 
 export function getTotalAllocatedPower(power: PowerAllocation): number {
@@ -141,8 +140,9 @@ export function stepShiftPhysics(params: {
   marsSite: MarsSite | null;
   power: PowerAllocation;
   systems: BaseSystemsState;
+  sandboxMode?: boolean;
 }): BaseSystemsState {
-  const { world, marsSite, power, systems } = params;
+  const { world, marsSite, power, systems, sandboxMode = false } = params;
   const reqElec = getRequiredElectrolysisKw(world, systems);
   const reqGrow = getRequiredGrowHeatKw(world, marsSite, systems);
 
@@ -178,12 +178,17 @@ export function stepShiftPhysics(params: {
     nextCo2 += (520 - nextCo2) * 0.12;
   }
 
+  const minStat = sandboxMode ? 18 : 0;
+  const minTemp = sandboxMode ? 11 : -10;
+  const maxTemp = sandboxMode ? 39 : 60;
+  const maxCo2 = sandboxMode ? 2200 : 5000;
+
   return {
     ...systems,
-    waterO2Pct: Math.max(0, Math.min(100, Number(nextWaterO2.toFixed(2)))),
-    cropsPct: Math.max(0, Math.min(100, Number(nextCrops.toFixed(2)))),
-    cabinTempC: Math.max(-10, Math.min(60, Number(nextTemp.toFixed(1)))),
-    co2Ppm: Math.max(400, Math.min(5000, Math.round(nextCo2)))
+    waterO2Pct: Math.max(minStat, Math.min(100, Number(nextWaterO2.toFixed(2)))),
+    cropsPct: Math.max(minStat, Math.min(100, Number(nextCrops.toFixed(2)))),
+    cabinTempC: Math.max(minTemp, Math.min(maxTemp, Number(nextTemp.toFixed(1)))),
+    co2Ppm: Math.max(400, Math.min(maxCo2, Math.round(nextCo2)))
   };
 }
 

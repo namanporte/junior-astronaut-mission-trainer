@@ -1,6 +1,7 @@
 import {
   Activity,
   Droplets,
+  FlaskConical,
   HelpCircle,
   RotateCcw,
   Shield,
@@ -14,6 +15,7 @@ import {
 } from 'lucide-react';
 import {
   BaseSystemsState,
+  DifficultyMode,
   GamePhase,
   PowerAllocation,
   SolarFlareEvent,
@@ -26,6 +28,7 @@ import {
 
 interface HudTopBarProps {
   world: WorldBody;
+  mode: DifficultyMode;
   siteName: string;
   sol: number;
   totalSols: number;
@@ -44,6 +47,7 @@ interface HudTopBarProps {
 
 export function HudTopBar({
   world,
+  mode,
   siteName,
   sol,
   totalSols,
@@ -64,6 +68,7 @@ export function HudTopBar({
   const effectiveShield = power.shieldingKw + systems.nextSolShieldBonusKw;
   const requiredShield = upcomingFlare?.requiredShieldKw ?? 20;
 
+  const isSandbox = mode === 'SANDBOX';
   const waterLow = systems.waterO2Pct <= 30;
   const cropsLow = systems.cropsPct <= 30 || systems.bioContamActive;
   const tempHot = systems.cabinTempC >= 36;
@@ -74,16 +79,18 @@ export function HudTopBar({
   return (
     <header className="pointer-events-auto w-full max-w-[1260px] mx-auto rounded-2xl bg-slate-950/92 border border-slate-700/90 shadow-xl px-3.5 py-2 text-slate-100">
       <div className="flex flex-wrap items-center justify-between gap-2.5">
-        {/* Left: World, Gravity & Sol Timer */}
+        {/* Left: World, Gravity & Mode / Timer */}
         <div className="flex items-center gap-2.5 min-w-0">
           <div
             className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border ${
-              world === 'MOON'
+              isSandbox
+                ? 'bg-indigo-500/25 border-indigo-400/60 text-indigo-300'
+                : world === 'MOON'
                 ? 'bg-sky-500/20 border-sky-400/50 text-sky-300'
                 : 'bg-orange-500/20 border-orange-400/50 text-orange-300'
             }`}
           >
-            <Activity className="w-5 h-5" />
+            {isSandbox ? <FlaskConical className="w-5 h-5" /> : <Activity className="w-5 h-5" />}
           </div>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-1.5 text-xs font-extrabold tracking-wide">
@@ -94,22 +101,30 @@ export function HudTopBar({
               <span className="text-slate-200 truncate max-w-[160px]">{siteName}</span>
             </div>
             <div className="flex items-center gap-2 text-[11px] font-mono-tabular font-bold text-slate-300">
-              <span>
-                Sol {sol}/{totalSols}
-              </span>
-              <span className="text-slate-500">·</span>
-              {phase === 'STORM_SIM' ? (
-                <span className="text-amber-300 font-extrabold">STORM IMPACT!</span>
-              ) : (
-                <span className={shiftSecondsLeft <= 8 ? 'text-amber-300' : 'text-emerald-300'}>
-                  Shift {shiftSecondsLeft}s
+              {isSandbox ? (
+                <span className="text-indigo-300 font-extrabold">
+                  SANDBOX SAFE MODE · No Game Over
                 </span>
+              ) : (
+                <>
+                  <span>
+                    Sol {sol}/{totalSols}
+                  </span>
+                  <span className="text-slate-500">·</span>
+                  {phase === 'STORM_SIM' ? (
+                    <span className="text-amber-300 font-extrabold">STORM IMPACT!</span>
+                  ) : (
+                    <span className={shiftSecondsLeft <= 8 ? 'text-amber-300' : 'text-emerald-300'}>
+                      Shift {shiftSecondsLeft}s
+                    </span>
+                  )}
+                </>
               )}
             </div>
           </div>
         </div>
 
-        {/* Center: Live Physics Readouts (No pill sandwiches, explicit state words) */}
+        {/* Center: Live Physics Readouts */}
         <div className="flex flex-wrap items-center gap-x-3.5 gap-y-1.5 font-mono-tabular text-xs font-bold">
           <div className="flex items-center gap-1 text-amber-300" title="Available Grid Power">
             <Zap className="w-3.5 h-3.5 shrink-0" />
@@ -171,7 +186,7 @@ export function HudTopBar({
                 ? 'text-sky-300'
                 : 'text-rose-300'
             }`}
-            title="Forcefield Power vs Today's Solar Storm"
+            title="Forcefield Power vs Solar Storm"
           >
             <Shield className="w-3.5 h-3.5 shrink-0" />
             <span>

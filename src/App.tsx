@@ -8,6 +8,7 @@ import { HudTopBar } from './components/HudTopBar';
 import { OnboardingModal } from './components/OnboardingModal';
 import { DpadVector, Outpost3DViewport } from './components/Outpost3DViewport';
 import { SolDebriefModal } from './components/SolDebriefModal';
+import { StoryCutsceneOverlay } from './components/StoryCutsceneOverlay';
 import { SurpriseEmergencyModal } from './components/SurpriseEmergencyModal';
 import {
   createInitialSystems,
@@ -16,6 +17,7 @@ import {
   pickSurpriseDeckForSol
 } from './data/physicsEvents';
 import { BASE_STATIONS, MARS_TREK_SITES } from './data/scienceData';
+import { buildStoryBeats } from './data/storyScript';
 import {
   generateEarthCommsHint,
   generateSolDebriefFeedback,
@@ -52,13 +54,21 @@ import {
   getTotalAllocatedPower,
   getTotalSolsForMode,
   INITIAL_POWER,
+  resolveEndOfSolStorm,
   SLIDER_MAX_KW,
-  stepShiftPhysics,
-  resolveEndOfSolStorm
+  stepShiftPhysics
 } from './utils/physicsSimulation';
+import { radioVoiceEngine } from './utils/radioVoiceEngine';
 import { soundEngine } from './utils/soundEngine';
 
 const SHIFT_DURATION_SECONDS = 38;
+
+const SANDBOX_BACKPACK: BackpackInventory = {
+  megaBattery: 3,
+  sunBlanket: 3,
+  waterCartridge: 3,
+  filamentSpool: 4
+};
 
 export function App() {
   const [world, setWorld] = useState<WorldBody>('MOON');
@@ -104,13 +114,17 @@ export function App() {
 
   const [commsDelaySeconds, setCommsDelaySeconds] = useState(0);
   const [commsLoading, setCommsLoading] = useState(false);
+  const [radioSpeaking, setRadioSpeaking] = useState(false);
   const [commsMessage, setCommsMessage] = useState<{
     text: string;
     isAiGenerated: boolean;
   } | null>(null);
 
+  const isSandbox = mode === 'SANDBOX';
   const totalSols = getTotalSolsForMode(world, mode);
   const activeMarsSite = world === 'MARS' ? selectedMarsSite : null;
+  const siteName = world === 'MARS' ? selectedMarsSite.name : 'Lunar Outpost Alpha';
+
   const maxGridBudgetKw = useMemo(
     () => computeEffectiveGridBudget({ world, marsSite: activeMarsSite, systems }),
     [world, activeMarsSite, systems]
@@ -118,6 +132,7 @@ export function App() {
 
   const upcomingFlare = flareEvents[(sol - 1) % flareEvents.length] ?? null;
   const morningDilemma = useMemo(() => pickMorningDilemma(sol), [sol]);
+  const storyBeats = useMemo(() => buildStoryBeats(world, siteName), [world, siteName]);
 
   // Fetch solar storm progression silently on mount
   useEffect(() => {
@@ -132,7 +147,7 @@ export function App() {
     };
   }, []);
 
-  // Clamp allocated power whenever grid budget shrinks (dust or frozen battery)
+  // Clamp allocated power whenever grid budget shrinks
   useEffect(() => {
     setPower((prev) => clampAllocationToBudget(prev, maxGridBudgetKw));
   }, [maxGridBudgetKw]);
@@ -184,6 +199,7 @@ export function App() {
 
   const checkFatalThresholds = useCallback(
     (next: BaseSystemsState): string | null => {
+      if (isSandbox) return null;
       if (next.waterO2Pct <= 0) {
         return 'Water & Electrolysis Oxygen hit 0%! Remember: in space, recycled water makes your breathable air too!';
       }
@@ -198,7 +214,7 @@ export function App() {
       }
       return null;
     },
-    []
+    [isSandbox]
   );
 
   // Trigger end-of-Sol solar storm impact animation + Gemini AI debrief
@@ -245,6 +261,17 @@ export function App() {
         capcomAiPowered: capcomResp.isAiGenerated
       });
 
+      // Keep Sandbox Mode strictly safe even after a test storm
+      const safeEndSystems: BaseSystemsState = isSandbox
+        ? {
+            ...endSystems,
+            waterO2Pct: Math.max(20, endSystems.waterO2Pct),
+            cropsPct: Math.max(20, endSystems.cropsPct),
+            cabinTempC: Math.min(39, Math.max(12, endSystems.cabinTempC)),
+            co2Ppm: Math.min(2200, endSystems.co2Ppm)
+          }
+        : endSystems;
+
       if (debrief.shieldHeld) {
         soundEngine.playSolSurvivedChime();
       } else {
@@ -267,21 +294,27 @@ export function App() {
         requiredShieldKw: upcomingFlare.requiredShieldKw,
         effectiveShieldKw: debrief.effectiveShieldPower,
         shieldHeld: debrief.shieldHeld,
-        waterO2After: debrief.endWaterO2,
-        cropsAfter: debrief.endCrops,
-        cabinTempAfter: debrief.endTempC,
-        co2PpmAfter: debrief.endCo2Ppm,
+        waterO2After: safeEndSystems.waterO2Pct,
+        cropsAfter: safeEndSystems.cropsPct,
+        cabinTempAfter: safeEndSystems.cabinTempC,
+        co2PpmAfter: safeEndSystems.co2Ppm,
         morningChoice: morningChoiceTag,
         surpriseDecisions: solSurpriseDecisions,
         gadgetsUsed: solGadgetsUsed,
         summaryNote
       };
 
-      setSystems(endSystems);
-      setDebriefData(debrief);
+      setSystems(safeEndSystems);
+      setDebriefData({
+        ...debrief,
+        endWaterO2: safeEndSystems.waterO2Pct,
+        endCrops: safeEndSystems.cropsPct,
+        endTempC: safeEndSystems.cabinTempC,
+        endCo2Ppm: safeEndSystems.co2Ppm
+      });
       setTraceLog((prev) => [...prev, logEntry]);
 
-      const fail = checkFatalThresholds(endSystems);
+      const fail = checkFatalThresholds(safeEndSystems);
       if (fail) {
         setFailureReason(fail);
       }
@@ -298,6 +331,7 @@ export function App() {
     sol,
     world,
     mode,
+    isSandbox,
     activeMarsSite,
     solStartWaterO2,
     solStartCrops,
@@ -308,7 +342,7 @@ export function App() {
     showToast
   ]);
 
-  // Active shift 1-second physics + countdown + surprise emergency triggers
+  // Active shift 1-second physics + countdown + surprise emergency triggers (disabled in Sandbox!)
   useEffect(() => {
     if (phase !== 'ACTIVE_SHIFT' || showForecastModal || showHelpModal) return;
 
@@ -318,7 +352,8 @@ export function App() {
           world,
           marsSite: activeMarsSite,
           power,
-          systems: prev
+          systems: prev,
+          sandboxMode: isSandbox
         });
         const fatal = checkFatalThresholds(next);
         if (fatal) {
@@ -328,9 +363,10 @@ export function App() {
         return next;
       });
 
+      if (isSandbox) return; // No timer pressure or surprise ambushes in Sandbox Mode
+
       setShiftSecondsLeft((prevLeft) => {
         const nextLeft = prevLeft - 1;
-        // Fire surprise 1 at 28s remaining, surprise 2 at 14s remaining
         if (nextLeft === 28 && surpriseDeck[0] && !firedSurpriseIds.includes(surpriseDeck[0].id)) {
           const em = surpriseDeck[0];
           setFiredSurpriseIds((f) => [...f, em.id]);
@@ -360,6 +396,7 @@ export function App() {
     return () => window.clearInterval(interval);
   }, [
     phase,
+    isSandbox,
     showForecastModal,
     showHelpModal,
     world,
@@ -396,10 +433,11 @@ export function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [phase, activeEmergency, nearestStation, showToast]);
 
-  const handleStartMission = () => {
+  const handleStartMission = (skipStory = false) => {
     soundEngine.unlock();
     soundEngine.playButtonClick('launch');
     haptics.launch();
+    radioVoiceEngine.stop();
 
     const initSys = createInitialSystems(world);
     const budget = computeEffectiveGridBudget({
@@ -410,7 +448,7 @@ export function App() {
 
     setSol(1);
     setSystems(initSys);
-    setBackpack(INITIAL_BACKPACK);
+    setBackpack(mode === 'SANDBOX' ? SANDBOX_BACKPACK : INITIAL_BACKPACK);
     setPower(clampAllocationToBudget(INITIAL_POWER, budget));
     setSolStartWaterO2(initSys.waterO2Pct);
     setSolStartCrops(initSys.cropsPct);
@@ -423,7 +461,23 @@ export function App() {
     setMorningChoiceTag(undefined);
     setSolSurpriseDecisions([]);
     setSolGadgetsUsed([]);
-    setPhase('MORNING_DILEMMA');
+    setShiftSecondsLeft(SHIFT_DURATION_SECONDS);
+
+    if (skipStory && mode === 'SANDBOX') {
+      showToast('Welcome to Sandbox Safe Lab! Experiment with power & walk all 5 stations freely.');
+      setPhase('ACTIVE_SHIFT');
+    } else {
+      setPhase('STORY_INTRO');
+    }
+  };
+
+  const handleStoryComplete = () => {
+    if (mode === 'SANDBOX') {
+      showToast('Sandbox Lab ready! Test sliders, stations, and radio voices with zero crises.');
+      setPhase('ACTIVE_SHIFT');
+    } else {
+      setPhase('MORNING_DILEMMA');
+    }
   };
 
   const handleChooseMorningDilemma = (opt: DilemmaOption) => {
@@ -452,7 +506,10 @@ export function App() {
     setSystems(res.nextSystems);
     setBackpack(res.nextBackpack);
     if (res.extraShieldKw) {
-      setPower((p) => ({ ...p, shieldingKw: Math.min(SLIDER_MAX_KW, p.shieldingKw + res.extraShieldKw!) }));
+      setPower((p) => ({
+        ...p,
+        shieldingKw: Math.min(SLIDER_MAX_KW, p.shieldingKw + res.extraShieldKw!)
+      }));
     }
     setSolSurpriseDecisions((prev) => [...prev, res.choiceTag]);
     showToast(res.bannerText);
@@ -509,6 +566,36 @@ export function App() {
     });
   };
 
+  const handleSandboxTrigger = (action: 'DUST' | 'LEAK' | 'OVERHEAT' | 'CO2' | 'RESET' | 'STORM') => {
+    if (action === 'STORM') {
+      handleBraceForStorm();
+      return;
+    }
+    if (action === 'RESET') {
+      const fresh = createInitialSystems(world);
+      setSystems({ ...fresh, dustCoatPct: 0, perchlorateLock: false });
+      setBackpack(SANDBOX_BACKPACK);
+      showToast('Sandbox reset! All base systems back to 100% optimal condition.');
+      return;
+    }
+    setSystems((prev) => {
+      if (action === 'DUST') {
+        showToast('Practice Hazard: Regolith Dust coated solar panels! Visit Solar Yard to scrub.');
+        return { ...prev, dustCoatPct: 45 };
+      }
+      if (action === 'LEAK') {
+        showToast('Practice Hazard: Hull Micro-Leak opened! Visit Air & Water Bay to weld it shut.');
+        return { ...prev, hullLeakActive: true };
+      }
+      if (action === 'OVERHEAT') {
+        showToast('Practice Hazard: Vacuum Radiators hit! Visit Thermal & 3D Lab to cool down.');
+        return { ...prev, radiatorHealthPct: 45, cabinTempC: 37 };
+      }
+      showToast('Practice Hazard: CO2 Scrubber saturated! Visit Air & Water Bay to bake out.');
+      return { ...prev, scrubberSaturated: true, co2Ppm: 1950 };
+    });
+  };
+
   const handleUpdatePower = (key: keyof PowerAllocation, deltaKw: number) => {
     setPower((prev) => {
       const currentVal = prev[key];
@@ -550,11 +637,24 @@ export function App() {
     soundEngine.playPowerUpTick(50);
   };
 
+  const speakRadioLine = useCallback(
+    (text: string) => {
+      radioVoiceEngine.play({
+        text,
+        profile: 'RADIO',
+        muted,
+        onStart: () => setRadioSpeaking(true),
+        onEnd: () => setRadioSpeaking(false)
+      });
+    },
+    [muted]
+  );
+
   const handleAskEarthBuddy = async () => {
     if (!upcomingFlare || commsLoading || commsDelaySeconds > 0) return;
     soundEngine.playCommsPing();
     const target: CommsTarget = world;
-    const delaySec = target === 'MOON' ? 3 : 12; // Playable realistic light-lag preview (3s vs 12s)
+    const delaySec = target === 'MOON' ? 3 : 8;
     setCommsDelaySeconds(delaySec);
     setCommsLoading(true);
 
@@ -566,10 +666,18 @@ export function App() {
       setCommsMessage(resp);
       setCommsLoading(false);
       soundEngine.playCommsReturnChirp();
+      speakRadioLine(resp.text);
     }, delaySec * 1000);
   };
 
   const handleNextSol = async () => {
+    radioVoiceEngine.stop();
+    if (isSandbox) {
+      setDebriefData(null);
+      setPhase('ACTIVE_SHIFT');
+      return;
+    }
+
     if (failureReason) {
       setPhase('GAME_OVER');
       return;
@@ -579,14 +687,19 @@ export function App() {
       soundEngine.playVictoryChime();
       setPhase('VICTORY');
       const shieldedCount = traceLog.filter((t) => t.shieldHeld).length;
-      const rank = calculateCommanderRank(systems.waterO2Pct, systems.cropsPct, shieldedCount, totalSols);
+      const rank = calculateCommanderRank(
+        systems.waterO2Pct,
+        systems.cropsPct,
+        shieldedCount,
+        totalSols
+      );
       const comm = await generateVictoryCommendation({
         finalWaterO2: Math.round(systems.waterO2Pct),
         finalCrops: Math.round(systems.cropsPct),
         totalSols,
         rank,
         world,
-        siteName: world === 'MARS' ? selectedMarsSite.name : 'Lunar Outpost Alpha'
+        siteName
       });
       setVictoryCommendation(comm);
       return;
@@ -638,7 +751,7 @@ export function App() {
         onFootstepJump={() => soundEngine.playSliderTick(35)}
       />
 
-      {/* CO2 Cognitive Haze / Thermal Rim Physics Vignettes (no backdrop-blur!) */}
+      {/* CO2 Cognitive Haze / Thermal Rim Physics Vignettes */}
       {highCo2 && (
         <div
           aria-hidden="true"
@@ -659,85 +772,106 @@ export function App() {
       )}
 
       {/* NON-BLOCKING FLOATING HUD LAYER */}
-      <div className="pointer-events-none fixed inset-0 z-20 flex flex-col justify-between p-2.5 sm:p-4">
-        <div className="space-y-2">
-          <HudTopBar
-            world={world}
-            siteName={world === 'MARS' ? selectedMarsSite.name : 'Lunar Outpost Alpha'}
-            sol={sol}
-            totalSols={totalSols}
-            phase={phase}
-            shiftSecondsLeft={shiftSecondsLeft}
-            maxGridBudgetKw={maxGridBudgetKw}
-            power={power}
-            systems={systems}
-            upcomingFlare={upcomingFlare}
-            muted={muted}
-            onOpenForecast={() => setShowForecastModal(true)}
-            onOpenHelp={() => setShowHelpModal(true)}
-            onToggleMute={() => {
-              const next = !muted;
-              soundEngine.muted = next;
-              setMuted(next);
-            }}
-            onRestart={() => setPhase('ONBOARDING')}
-          />
+      {phase !== 'STORY_INTRO' && (
+        <div className="pointer-events-none fixed inset-0 z-20 flex flex-col justify-between p-2.5 sm:p-4">
+          <div className="space-y-2">
+            <HudTopBar
+              world={world}
+              mode={mode}
+              siteName={siteName}
+              sol={sol}
+              totalSols={totalSols}
+              phase={phase}
+              shiftSecondsLeft={shiftSecondsLeft}
+              maxGridBudgetKw={maxGridBudgetKw}
+              power={power}
+              systems={systems}
+              upcomingFlare={upcomingFlare}
+              muted={muted}
+              onOpenForecast={() => setShowForecastModal(true)}
+              onOpenHelp={() => setShowHelpModal(true)}
+              onToggleMute={() => {
+                const next = !muted;
+                soundEngine.muted = next;
+                if (next) radioVoiceEngine.stop();
+                setMuted(next);
+              }}
+              onRestart={() => {
+                radioVoiceEngine.stop();
+                setPhase('ONBOARDING');
+              }}
+            />
 
-          {/* Event / Physics Toast Banner */}
-          {(bannerText || highCo2) && (
-            <div className="pointer-events-auto max-w-xl mx-auto rounded-xl bg-slate-950/92 border border-sky-400/60 px-3.5 py-2 text-xs font-bold text-slate-100 shadow-lg flex items-center justify-center gap-2 text-center">
-              {highCo2 && !bannerText ? (
-                <>
-                  <AlertTriangle className="w-4 h-4 text-amber-300 shrink-0" />
-                  <span>
-                    High CO2 ({systems.co2Ppm} ppm)! Walk to Air &amp; Water Bay to bake out the
-                    scrubbers!
-                  </span>
-                </>
-              ) : (
-                <>
-                  <Sparkles className="w-4 h-4 text-sky-300 shrink-0" />
-                  <span>{bannerText}</span>
-                </>
-              )}
-            </div>
+            {(bannerText || highCo2) && (
+              <div className="pointer-events-auto max-w-xl mx-auto rounded-xl bg-slate-950/92 border border-sky-400/60 px-3.5 py-2 text-xs font-bold text-slate-100 shadow-lg flex items-center justify-center gap-2 text-center">
+                {highCo2 && !bannerText ? (
+                  <>
+                    <AlertTriangle className="w-4 h-4 text-amber-300 shrink-0" />
+                    <span>
+                      High CO2 ({systems.co2Ppm} ppm)! Walk to Air &amp; Water Bay to bake out the
+                      scrubbers!
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4 text-sky-300 shrink-0" />
+                    <span>{bannerText}</span>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
+          {(phase === 'ACTIVE_SHIFT' || phase === 'STORM_SIM' || phase === 'SURPRISE_DECISION') && (
+            <BottomControlDock
+              world={world}
+              mode={mode}
+              marsSite={activeMarsSite}
+              phase={phase}
+              nearestStation={nearestStation}
+              nearestDistance={nearestDistance}
+              systems={systems}
+              power={power}
+              maxGridBudgetKw={maxGridBudgetKw}
+              backpack={backpack}
+              activeEmergency={activeEmergency}
+              upcomingFlare={upcomingFlare}
+              commsTarget={world}
+              commsDelaySeconds={commsDelaySeconds}
+              commsMessage={commsMessage}
+              commsLoading={commsLoading}
+              radioSpeaking={radioSpeaking}
+              dpadRef={dpadRef}
+              onJump={() => {
+                setJumpNonce((n) => n + 1);
+                soundEngine.playSliderTick(35);
+              }}
+              onOpenEmergencyModal={() => {
+                if (activeEmergency) setPhase('SURPRISE_DECISION');
+              }}
+              onStationRepair={handleStationRepair}
+              onUpdatePower={handleUpdatePower}
+              onUseGadget={handleUseGadget}
+              onAskEarthBuddy={handleAskEarthBuddy}
+              onReplayRadioVoice={() => {
+                if (commsMessage) speakRadioLine(commsMessage.text);
+              }}
+              onSandboxTrigger={handleSandboxTrigger}
+              onBraceForStorm={handleBraceForStorm}
+            />
           )}
         </div>
+      )}
 
-        {/* Bottom Dock only shown during active exploration / storm */}
-        {(phase === 'ACTIVE_SHIFT' || phase === 'STORM_SIM' || phase === 'SURPRISE_DECISION') && (
-          <BottomControlDock
-            world={world}
-            marsSite={activeMarsSite}
-            phase={phase}
-            nearestStation={nearestStation}
-            nearestDistance={nearestDistance}
-            systems={systems}
-            power={power}
-            maxGridBudgetKw={maxGridBudgetKw}
-            backpack={backpack}
-            activeEmergency={activeEmergency}
-            upcomingFlare={upcomingFlare}
-            commsTarget={world}
-            commsDelaySeconds={commsDelaySeconds}
-            commsMessage={commsMessage}
-            commsLoading={commsLoading}
-            dpadRef={dpadRef}
-            onJump={() => {
-              setJumpNonce((n) => n + 1);
-              soundEngine.playSliderTick(35);
-            }}
-            onOpenEmergencyModal={() => {
-              if (activeEmergency) setPhase('SURPRISE_DECISION');
-            }}
-            onStationRepair={handleStationRepair}
-            onUpdatePower={handleUpdatePower}
-            onUseGadget={handleUseGadget}
-            onAskEarthBuddy={handleAskEarthBuddy}
-            onBraceForStorm={handleBraceForStorm}
-          />
-        )}
-      </div>
+      {/* STORY INTRO CUTSCENE (NASA OFFICE -> TRANSIT -> OUTPOST ARRIVAL) */}
+      {phase === 'STORY_INTRO' && (
+        <StoryCutsceneOverlay
+          world={world}
+          beats={storyBeats}
+          muted={muted}
+          onComplete={handleStoryComplete}
+        />
+      )}
 
       {/* PHASE MODALS */}
       {(phase === 'ONBOARDING' || showHelpModal) && (
@@ -749,11 +883,11 @@ export function App() {
           onSelectWorld={(w) => setWorld(w)}
           onSelectMode={(m) => setMode(m)}
           onSelectMarsSite={(site) => setSelectedMarsSite(site)}
-          onStart={() => {
+          onStart={(skipStory) => {
             if (showHelpModal) {
               setShowHelpModal(false);
             } else {
-              handleStartMission();
+              handleStartMission(Boolean(skipStory));
             }
           }}
         />
@@ -800,6 +934,8 @@ export function App() {
         <SolDebriefModal
           debrief={debriefData}
           totalSols={totalSols}
+          sandboxMode={isSandbox}
+          muted={muted}
           traceLog={traceLog}
           onNextSol={handleNextSol}
         />

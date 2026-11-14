@@ -1,5 +1,6 @@
 export type GamePhase =
   | 'ONBOARDING'
+  | 'STORY_INTRO'
   | 'MORNING_DILEMMA'
   | 'ACTIVE_SHIFT'
   | 'SURPRISE_DECISION'
@@ -9,10 +10,24 @@ export type GamePhase =
   | 'GAME_OVER';
 
 export type WorldBody = 'MOON' | 'MARS';
-export type DifficultyMode = 'CADET' | 'COMMANDER';
+export type DifficultyMode = 'CADET' | 'COMMANDER' | 'SANDBOX';
 export type CommsTarget = 'MOON' | 'MARS';
 export type FlareSeverity = 'MILD' | 'MODERATE' | 'EXTREME';
 export type DonkiDataSource = 'LIVE_NASA_API' | 'NASA_ARCHIVE_FALLBACK';
+
+export type StorySceneKind = 'NASA_OFFICE' | 'TRANSIT' | 'OUTPOST_ARRIVAL';
+export type VoiceProfile = 'DIRECTOR' | 'ENGINEER' | 'RADIO';
+
+export interface StoryBeat {
+  id: string;
+  scene: StorySceneKind;
+  locationLabel: string;
+  speakerName: string;
+  speakerRole: string;
+  voiceProfile: VoiceProfile;
+  line: string;
+  sceneHint: string;
+}
 
 export type StationId =
   | 'SOLAR_GRID'

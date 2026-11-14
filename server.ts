@@ -9,6 +9,10 @@ const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT) || 3000;
 const MODEL_NAME = 'gemini-4-hydrogen';
+const TTS_MODEL_NAME = 'gemini-3.8-flash-lite-tts';
+
+const VALID_VOICES = new Set(['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr']);
+const ttsCache = new Map<string, string>();
 
 function getGeminiClient(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -28,6 +32,79 @@ function getGeminiClient(): GoogleGenAI | null {
 async function startServer() {
   const app = express();
   app.use(express.json());
+
+  app.post('/api/tts', async (req: Request, res: Response) => {
+    const ai = getGeminiClient();
+    if (!ai) {
+      res.status(503).json({ error: 'Gemini API key unavailable' });
+      return;
+    }
+
+    try {
+      const rawText = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+      if (!rawText) {
+        res.status(400).json({ error: 'Missing text for TTS' });
+        return;
+      }
+
+      const clippedText = rawText.slice(0, 420);
+      const requestedVoice = typeof req.body?.voiceName === 'string' ? req.body.voiceName : 'Kore';
+      const voiceName = VALID_VOICES.has(requestedVoice) ? requestedVoice : 'Kore';
+      const style =
+        typeof req.body?.style === 'string' && req.body.style.trim()
+          ? req.body.style.trim().slice(0, 140)
+          : 'Clear, enthusiastic space mission voice';
+
+      const cacheKey = `${voiceName}|${style}|${clippedText}`;
+      const cached = ttsCache.get(cacheKey);
+      if (cached) {
+        res.json({ audioBase64: cached, mimeType: 'audio/wav', cached: true });
+        return;
+      }
+
+      const response = await ai.models.generateContent({
+        model: TTS_MODEL_NAME,
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              {
+                text: clippedText,
+                speechMetadata: {
+                  style
+                }
+              }
+            ]
+          }
+        ],
+        config: {
+          responseModalities: ['AUDIO'],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName }
+            }
+          }
+        }
+      });
+
+      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (!base64Audio) {
+        res.status(502).json({ error: 'Empty audio response from TTS' });
+        return;
+      }
+
+      if (ttsCache.size >= 48) {
+        const oldestKey = ttsCache.keys().next().value;
+        if (oldestKey) ttsCache.delete(oldestKey);
+      }
+      ttsCache.set(cacheKey, base64Audio);
+
+      res.json({ audioBase64: base64Audio, mimeType: 'audio/wav' });
+    } catch (err) {
+      console.error('TTS generation error:', err);
+      res.status(500).json({ error: 'Failed to synthesize voice' });
+    }
+  });
 
   app.post('/api/capcom/debrief', async (req: Request, res: Response) => {
     const ai = getGeminiClient();

@@ -12,17 +12,20 @@ import {
   Compass,
   Droplets,
   Flame,
+  FlaskConical,
   Footprints,
   Headphones,
   Minus,
   Plus,
   Printer,
   Radio,
+  RotateCcw,
   Shield,
   Sparkles,
   Sprout,
   Sun,
   Umbrella,
+  Volume2,
   Wind,
   Wrench,
   Zap
@@ -32,6 +35,7 @@ import {
   BackpackInventory,
   BaseSystemsState,
   CommsTarget,
+  DifficultyMode,
   GamePhase,
   MarsSite,
   PowerAllocation,
@@ -49,10 +53,11 @@ import {
 } from '../utils/physicsSimulation';
 import { DpadVector } from './Outpost3DViewport';
 
-export type DockTab = 'STATION' | 'POWER' | 'BACKPACK' | 'RADIO';
+export type DockTab = 'STATION' | 'POWER' | 'BACKPACK' | 'RADIO' | 'SANDBOX_LAB';
 
 interface BottomControlDockProps {
   world: WorldBody;
+  mode: DifficultyMode;
   marsSite: MarsSite | null;
   phase: GamePhase;
   nearestStation: StationId | null;
@@ -67,6 +72,7 @@ interface BottomControlDockProps {
   commsDelaySeconds: number;
   commsMessage: { text: string; isAiGenerated: boolean } | null;
   commsLoading: boolean;
+  radioSpeaking: boolean;
   dpadRef: React.MutableRefObject<DpadVector>;
   onJump: () => void;
   onOpenEmergencyModal: () => void;
@@ -74,11 +80,14 @@ interface BottomControlDockProps {
   onUpdatePower: (key: keyof PowerAllocation, deltaKw: number) => void;
   onUseGadget: (item: 'megaBattery' | 'sunBlanket' | 'waterCartridge') => void;
   onAskEarthBuddy: () => void;
+  onReplayRadioVoice: () => void;
+  onSandboxTrigger: (action: 'DUST' | 'LEAK' | 'OVERHEAT' | 'CO2' | 'RESET' | 'STORM') => void;
   onBraceForStorm: () => void;
 }
 
 export function BottomControlDock({
   world,
+  mode,
   marsSite,
   phase,
   nearestStation,
@@ -92,6 +101,7 @@ export function BottomControlDock({
   commsDelaySeconds,
   commsMessage,
   commsLoading,
+  radioSpeaking,
   dpadRef,
   onJump,
   onOpenEmergencyModal,
@@ -99,11 +109,14 @@ export function BottomControlDock({
   onUpdatePower,
   onUseGadget,
   onAskEarthBuddy,
+  onReplayRadioVoice,
+  onSandboxTrigger,
   onBraceForStorm
 }: BottomControlDockProps) {
   const [collapsed, setCollapsed] = useState(false);
-  const [activeTab, setActiveTab] = useState<DockTab>('STATION');
+  const [activeTab, setActiveTab] = useState<DockTab>(mode === 'SANDBOX' ? 'POWER' : 'STATION');
 
+  const isSandbox = mode === 'SANDBOX';
   const stationMeta = nearestStation
     ? BASE_STATIONS.find((s) => s.id === nearestStation) ?? null
     : null;
@@ -121,7 +134,6 @@ export function BottomControlDock({
     dpadRef.current = { x, z };
   };
 
-  // Collect active physical hazards so kids always know why numbers are drifting
   const activeHazards: string[] = [];
   if (systems.dustCoatPct >= 15) activeHazards.push(`Regolith Dust ${systems.dustCoatPct}%`);
   if (systems.frozenCells > 0) activeHazards.push(`${systems.frozenCells} Frozen Battery`);
@@ -133,8 +145,28 @@ export function BottomControlDock({
     activeHazards.push(`Radiators ${systems.radiatorHealthPct}%`);
   if (systems.juryRigValveActive) activeHazards.push('Jury-Rigged Valve');
 
+  const tabs: Array<{ id: DockTab; label: string; icon: typeof Wrench }> = [
+    { id: 'STATION', label: 'Walk & Fix', icon: Wrench },
+    { id: 'POWER', label: `Power Grid (${freeKw}⚡)`, icon: Zap },
+    {
+      id: 'BACKPACK',
+      label: `Backpack (${
+        backpack.megaBattery +
+        backpack.sunBlanket +
+        backpack.waterCartridge +
+        backpack.filamentSpool
+      })`,
+      icon: Backpack
+    },
+    { id: 'RADIO', label: radioSpeaking ? 'Radio Live...' : 'Earth Radio', icon: Headphones }
+  ];
+
+  if (isSandbox) {
+    tabs.push({ id: 'SANDBOX_LAB', label: 'Sandbox Lab', icon: FlaskConical });
+  }
+
   return (
-    <div className="pointer-events-auto w-full max-w-[960px] mx-auto rounded-2xl bg-slate-950/95 border border-slate-700 shadow-2xl text-slate-100 overflow-hidden">
+    <div className="pointer-events-auto w-full max-w-[980px] mx-auto rounded-2xl bg-slate-950/95 border border-slate-700 shadow-2xl text-slate-100 overflow-hidden">
       {/* Persistent Top Strip inside Dock */}
       <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2 border-b border-slate-800 bg-slate-900/95">
         <div className="flex flex-wrap items-center gap-2 min-w-0">
@@ -181,10 +213,14 @@ export function BottomControlDock({
             type="button"
             disabled={phase !== 'ACTIVE_SHIFT'}
             onClick={onBraceForStorm}
-            className="btn-tactile px-3 py-1 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 border border-blue-400 text-white text-xs font-extrabold flex items-center gap-1.5 cursor-pointer"
+            className={`btn-tactile px-3 py-1 rounded-xl disabled:opacity-50 border text-white text-xs font-extrabold flex items-center gap-1.5 cursor-pointer ${
+              isSandbox
+                ? 'bg-indigo-600 hover:bg-indigo-500 border-indigo-400'
+                : 'bg-blue-600 hover:bg-blue-500 border-blue-400'
+            }`}
           >
             <Shield className="w-3.5 h-3.5" />
-            <span>Brace for Storm</span>
+            <span>{isSandbox ? 'Test Storm Shield' : 'Brace for Storm'}</span>
           </button>
         </div>
       </div>
@@ -192,26 +228,9 @@ export function BottomControlDock({
       {/* Collapsible Body */}
       {!collapsed && (
         <div className="p-3">
-          {/* Tabs + Active Hazard Summary */}
           <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
             <div className="flex flex-wrap items-center gap-1.5">
-              {(
-                [
-                  { id: 'STATION', label: 'Walk & Fix', icon: Wrench },
-                  { id: 'POWER', label: `Power Grid (${freeKw}⚡)`, icon: Zap },
-                  {
-                    id: 'BACKPACK',
-                    label: `Backpack (${
-                      backpack.megaBattery +
-                      backpack.sunBlanket +
-                      backpack.waterCartridge +
-                      backpack.filamentSpool
-                    })`,
-                    icon: Backpack
-                  },
-                  { id: 'RADIO', label: 'Earth Radio', icon: Headphones }
-                ] as const
-              ).map((tab) => {
+              {tabs.map((tab) => {
                 const Icon = tab.icon;
                 const active = activeTab === tab.id;
                 return (
@@ -363,9 +382,7 @@ export function BottomControlDock({
                             className="btn-tactile px-3 py-1.5 rounded-xl bg-sky-500/20 hover:bg-sky-500/30 disabled:opacity-40 border border-sky-400/50 text-sky-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
                           >
                             <Printer className="w-3.5 h-3.5" />
-                            <span>
-                              3D-Print Valve ({backpack.filamentSpool} Spool)
-                            </span>
+                            <span>3D-Print Valve ({backpack.filamentSpool} Spool)</span>
                           </button>
                         </>
                       )}
@@ -385,7 +402,8 @@ export function BottomControlDock({
                 ) : (
                   <div className="space-y-2">
                     <div className="text-xs font-bold text-slate-200">
-                      Outpost Regolith Yard — Walk near any glowing station pad to inspect &amp; repair!
+                      Outpost Regolith Yard — Walk near any glowing station pad to inspect &amp;
+                      repair!
                     </div>
                     <div className="flex flex-wrap gap-1.5 text-[11px] text-slate-300">
                       {BASE_STATIONS.map((s) => (
@@ -401,7 +419,6 @@ export function BottomControlDock({
                 )}
               </div>
 
-              {/* Compact On-Screen Walk Pad + Jump for Touch / Mouse Players */}
               <div className="flex items-center gap-2.5 justify-center">
                 <div className="grid grid-cols-3 gap-1 w-[108px]">
                   <div />
@@ -509,7 +526,11 @@ export function BottomControlDock({
                       <span className="font-mono-tabular text-xs font-extrabold text-white">
                         {channel.value}⚡{' '}
                         <span className={deficit ? 'text-amber-300' : 'text-slate-400'}>
-                          (Need {channel.key === 'shieldingKw' && systems.radarScrambled ? '?' : channel.needed}⚡)
+                          (Need{' '}
+                          {channel.key === 'shieldingKw' && systems.radarScrambled
+                            ? '?'
+                            : channel.needed}
+                          ⚡)
                         </span>
                       </span>
                     </div>
@@ -620,15 +641,31 @@ export function BottomControlDock({
             </div>
           )}
 
-          {/* TAB 4: EARTH RADIO */}
+          {/* TAB 4: EARTH RADIO WITH REAL RADIO-EFFECT VOICE */}
           {activeTab === 'RADIO' && (
             <div className="rounded-xl bg-slate-900 border border-slate-800 p-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 text-xs font-extrabold text-sky-300 mb-1">
+                <div className="flex flex-wrap items-center gap-2 text-xs font-extrabold text-sky-300 mb-1">
                   <Radio className="w-4 h-4 shrink-0" />
                   <span>
-                    Earth Buddy Comms ({commsTarget === 'MOON' ? 'Moon 3s Delay' : 'Mars 45s Delay'})
+                    Earth Buddy Voice Radio ({commsTarget === 'MOON' ? 'Moon 3s Delay' : 'Mars 12s Lag'})
                   </span>
+                  {radioSpeaking && (
+                    <span className="inline-flex items-center gap-1 text-[10px] text-emerald-300">
+                      <span className="inline-flex items-end gap-0.5 h-3" aria-hidden="true">
+                        <span className="w-0.5 h-2 bg-emerald-400 animate-dsn-bar" />
+                        <span
+                          className="w-0.5 h-3 bg-emerald-400 animate-dsn-bar"
+                          style={{ animationDelay: '0.15s' }}
+                        />
+                        <span
+                          className="w-0.5 h-1.5 bg-emerald-400 animate-dsn-bar"
+                          style={{ animationDelay: '0.3s' }}
+                        />
+                      </span>
+                      UHF Voice Active
+                    </span>
+                  )}
                   {commsMessage?.isAiGenerated && (
                     <span className="inline-flex items-center gap-1 text-[10px] text-amber-300">
                       <Sparkles className="w-3 h-3" />
@@ -641,18 +678,78 @@ export function BottomControlDock({
                     ? `Radio beam flying across space... arriving in ${commsDelaySeconds}s`
                     : commsMessage
                     ? commsMessage.text
-                    : 'Need strategy tips on Water/O2 electrolysis, radiators, or Forcefields? Beam Earth!'}
+                    : 'Press Ask Earth Buddy to hear live UHF radio-effect voice advice on balancing your power sliders!'}
                 </p>
               </div>
 
-              <button
-                type="button"
-                disabled={commsLoading || commsDelaySeconds > 0}
-                onClick={onAskEarthBuddy}
-                className="btn-tactile px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-slate-950 text-xs font-extrabold shrink-0 cursor-pointer"
-              >
-                {commsDelaySeconds > 0 ? `Wait ${commsDelaySeconds}s...` : 'Ask Earth Buddy'}
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                {commsMessage && commsDelaySeconds === 0 && (
+                  <button
+                    type="button"
+                    onClick={onReplayRadioVoice}
+                    className="btn-tactile px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-sky-200 text-xs font-extrabold flex items-center gap-1 cursor-pointer"
+                  >
+                    <Volume2 className="w-3.5 h-3.5" />
+                    <span>Hear Radio</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  disabled={commsLoading || commsDelaySeconds > 0}
+                  onClick={onAskEarthBuddy}
+                  className="btn-tactile px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-slate-950 text-xs font-extrabold cursor-pointer"
+                >
+                  {commsDelaySeconds > 0 ? `Wait ${commsDelaySeconds}s...` : 'Ask Earth Buddy'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 5: SANDBOX SAFE PRACTICE CONTROLS */}
+          {activeTab === 'SANDBOX_LAB' && isSandbox && (
+            <div className="rounded-xl bg-indigo-950/50 border border-indigo-500/40 p-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="text-xs text-indigo-100 font-semibold">
+                Test physics problems safely without any risk of Game Over:
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => onSandboxTrigger('DUST')}
+                  className="btn-tactile px-2.5 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/50 text-amber-200 text-xs font-bold cursor-pointer"
+                >
+                  + Dust Storm
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSandboxTrigger('LEAK')}
+                  className="btn-tactile px-2.5 py-1.5 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/50 text-cyan-200 text-xs font-bold cursor-pointer"
+                >
+                  + Hull Leak
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSandboxTrigger('OVERHEAT')}
+                  className="btn-tactile px-2.5 py-1.5 rounded-xl bg-orange-500/20 hover:bg-orange-500/30 border border-orange-400/50 text-orange-200 text-xs font-bold cursor-pointer"
+                >
+                  + Overheat
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSandboxTrigger('CO2')}
+                  className="btn-tactile px-2.5 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 border border-rose-400/50 text-rose-200 text-xs font-bold cursor-pointer"
+                >
+                  + High CO2
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSandboxTrigger('RESET')}
+                  className="btn-tactile px-2.5 py-1.5 rounded-xl bg-emerald-500/25 hover:bg-emerald-500/35 border border-emerald-400/60 text-emerald-200 text-xs font-extrabold flex items-center gap-1 cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Reset 100%</span>
+                </button>
+              </div>
             </div>
           )}
         </div>
