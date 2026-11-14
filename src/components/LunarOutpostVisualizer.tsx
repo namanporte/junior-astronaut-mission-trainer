@@ -1,4 +1,6 @@
 import { AlertTriangle, Radio, ShieldCheck, Sparkles, Sun, Telescope, Wind } from 'lucide-react';
+import lunarTerrainImg from '../assets/images/lunar_surface_horizon_1794684830159.jpg';
+import marsTerrainImg from '../assets/images/mars_surface_horizon_1794684829503.jpg';
 import {
   DifficultyMode,
   GamePhase,
@@ -25,6 +27,19 @@ interface LunarOutpostVisualizerProps {
   isCommsTransmitting: boolean;
 }
 
+function getCoordinatesLabel(isMars: boolean, marsSite: MarsSite | null): string {
+  if (!isMars) {
+    return 'LRO-CAM // 0.67°N 23.47°E · MARE TRANQUILLITATIS';
+  }
+  if (marsSite?.id === 'OLYMPUS') {
+    return 'MRO-TREK // 18.65°N 226.20°E · OLYMPUS MONS';
+  }
+  if (marsSite?.id === 'HELLAS') {
+    return 'MRO-TREK // 42.40°S 70.50°E · HELLAS PLANITIA';
+  }
+  return 'MRO-TREK // 18.38°N 77.58°E · JEZERO CRATER';
+}
+
 export function LunarOutpostVisualizer({
   sol,
   mode,
@@ -49,6 +64,7 @@ export function LunarOutpostVisualizer({
 
   const isMars = mode === 'COMMANDER';
   const siteTitle = isMars && marsSite ? `${marsSite.name} Outpost` : 'Lunar Outpost Schematic';
+  const hudCoords = getCoordinatesLabel(isMars, marsSite);
 
   const isCrisis = phase === 'CRISIS_PAUSE';
   const isExtremeCrisis = isCrisis && flareEvent.severityLevel === 'EXTREME';
@@ -60,10 +76,26 @@ export function LunarOutpostVisualizer({
 
   const flareClassFamily = `${flareEvent.classType.charAt(0)}-Class`;
 
+  // Upgrade #2: Solar Day/Night Cycle arcing across sky during 6s Sol simulation
+  const isDayCycleActive = phase === 'SIMULATING' || phase === 'CRISIS_PAUSE';
+  const sunProgress = isDayCycleActive ? Math.max(0, Math.min(1, simProgress / 100)) : 0.08;
+  const sunX = 95 + sunProgress * 465; // sweeps from 95 -> 560
+  const sunY = 86 - Math.sin(sunProgress * Math.PI) * 44; // rises to y=42 at noon, sets back down
+  const duskTintOpacity = isDayCycleActive ? Math.max(0, (sunProgress - 0.65) / 0.35) * 0.38 : 0.08;
+
+  // Upgrade #2: Power bus pulse scaling with kW allocation
+  const lifeBusSpeedSec = Math.max(0.45, 1.8 - (power.lifeSupport / 80) * 1.25);
+  const shieldBusSpeedSec = Math.max(0.45, 1.8 - (power.shielding / 80) * 1.25);
+
+  const terrainSrc = isMars ? marsTerrainImg : lunarTerrainImg;
+  const terrainAlt = isMars
+    ? 'Photorealistic Martian crater horizon terrain backdrop'
+    : 'Photorealistic Lunar regolith crater horizon terrain backdrop';
+
   return (
     <section
       aria-label="Outpost Visualizer"
-      className={`relative rounded-3xl bg-[#111830] border transition-all duration-300 flex flex-col justify-between overflow-hidden h-full ${
+      className={`relative rounded-3xl bg-[#0D1428] border transition-all duration-300 flex flex-col justify-between overflow-hidden h-full ${
         impactShakeActive ? 'animate-outpost-shake' : ''
       } ${
         showRedRadiationFlash
@@ -74,7 +106,7 @@ export function LunarOutpostVisualizer({
       }`}
     >
       {/* Top Visualizer Header + Solar Observatory Forecast */}
-      <div className="px-4 sm:px-5 pt-3.5 pb-1.5 flex flex-col gap-2 z-10 shrink-0">
+      <div className="px-4 sm:px-5 pt-3 pb-1.5 flex flex-col gap-1.5 z-10 shrink-0 bg-[#0D1428]/90 backdrop-blur-xs">
         <div className="flex items-center justify-between gap-3">
           <div>
             <h2 className="font-display font-bold text-base sm:text-lg text-white">{siteTitle}</h2>
@@ -101,10 +133,10 @@ export function LunarOutpostVisualizer({
         <div
           className={`rounded-xl border px-3 py-1.5 flex items-center justify-between gap-2 text-xs ${
             flareEvent.severityLevel === 'EXTREME'
-              ? 'bg-rose-950/50 border-rose-500/40 text-rose-100'
+              ? 'bg-rose-950/55 border-rose-500/40 text-rose-100'
               : flareEvent.severityLevel === 'MODERATE'
-              ? 'bg-amber-950/40 border-amber-500/40 text-amber-100'
-              : 'bg-cyan-950/40 border-cyan-500/35 text-cyan-100'
+              ? 'bg-amber-950/45 border-amber-500/40 text-amber-100'
+              : 'bg-cyan-950/45 border-cyan-500/35 text-cyan-100'
           }`}
         >
           <div className="flex items-center gap-2 min-w-0">
@@ -116,14 +148,38 @@ export function LunarOutpostVisualizer({
               {flareEvent.classType})
             </span>
           </div>
-          <span className="font-mono-tabular font-bold shrink-0 text-[11px] px-2 py-0.5 rounded-md bg-slate-900/70 border border-slate-700">
+          <span className="font-mono-tabular font-bold shrink-0 text-[11px] px-2 py-0.5 rounded-md bg-slate-900/75 border border-slate-700">
             {flareEvent.severityLevel}
           </span>
         </div>
       </div>
 
-      {/* Interactive SVG Base Canvas */}
-      <div className="relative flex-1 min-h-[200px] w-full px-3 flex items-center justify-center">
+      {/* Interactive Realistic Terrain + SVG Outpost Canvas */}
+      <div className="relative flex-1 min-h-[205px] w-full mx-0 flex items-center justify-center overflow-hidden bg-gradient-to-b from-[#070B18] via-[#101830] to-[#1A2036]">
+        {/* Upgrade #1: Photorealistic Lunar / Martian Terrain Backdrop */}
+        <img
+          src={terrainSrc}
+          alt={terrainAlt}
+          referrerPolicy="no-referrer"
+          className="absolute inset-0 w-full h-full object-cover object-center opacity-75 select-none pointer-events-none"
+        />
+
+        {/* Atmospheric & Dusk Lighting Scrim for high contrast */}
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 pointer-events-none transition-opacity duration-300"
+          style={{
+            background: showRedRadiationFlash
+              ? 'linear-gradient(to bottom, rgba(59,16,36,0.68) 0%, rgba(16,20,38,0.34) 52%, rgba(8,13,29,0.78) 100%)'
+              : 'linear-gradient(to bottom, rgba(7,11,24,0.62) 0%, rgba(10,16,34,0.28) 54%, rgba(7,11,24,0.78) 100%)'
+          }}
+        />
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 pointer-events-none bg-[#050814] transition-opacity duration-300"
+          style={{ opacity: duskTintOpacity }}
+        />
+
         {showRedRadiationFlash && (
           <div className="absolute top-2.5 left-1/2 -translate-x-1/2 z-20 px-4 py-1.5 rounded-xl bg-rose-600/95 border border-rose-300 text-white text-xs font-extrabold tracking-wide shadow-lg animate-pulse flex items-center gap-1.5 whitespace-nowrap">
             <AlertTriangle className="w-4 h-4" />
@@ -133,33 +189,18 @@ export function LunarOutpostVisualizer({
 
         <svg
           viewBox="0 0 760 400"
-          className="w-full h-full max-h-[340px] select-none"
+          className="relative z-10 w-full h-full max-h-[345px] select-none"
           role="img"
-          aria-label="Interactive illustration of Space Outpost showing Habitat Dome, Solar Array, Hydroponics Pod, and Magnetic Shield Bubble"
+          aria-label="Interactive Space Outpost schematic over realistic terrain showing Habitat Dome, Solar Array, Hydroponics Pod, Power Bus, and Magnetic Shield"
         >
           <defs>
-            <radialGradient id="spaceBg" cx="50%" cy="25%" r="80%">
-              <stop
-                offset="0%"
-                stopColor={
-                  showRedRadiationFlash ? '#3B1024' : isMars ? '#2A181F' : '#162247'
-                }
-              />
-              <stop offset="100%" stopColor="#080D1D" />
-            </radialGradient>
-
-            <linearGradient id="surfaceGround" x1="0%" y1="0%" x2="0%" y2="100%">
-              <stop offset="0%" stopColor={isMars ? '#7C3A27' : '#2A3454'} />
-              <stop offset="100%" stopColor={isMars ? '#3D1B14' : '#161D33'} />
-            </linearGradient>
-
             <radialGradient id="shieldDomeGrad" cx="50%" cy="80%" r="70%">
               <stop offset="0%" stopColor="#22D3EE" stopOpacity="0.02" />
               <stop offset="75%" stopColor="#22D3EE" stopOpacity={shieldBright ? '0.2' : '0.07'} />
               <stop
                 offset="100%"
                 stopColor="#22D3EE"
-                stopOpacity={shieldExtreme ? '0.5' : shieldBright ? '0.4' : '0.15'}
+                stopOpacity={shieldExtreme ? '0.52' : shieldBright ? '0.4' : '0.16'}
               />
             </radialGradient>
 
@@ -179,9 +220,9 @@ export function LunarOutpostVisualizer({
                 stopColor={
                   lifeSupportHealing ? '#34D399' : lifeSupportStable ? '#10B981' : '#64748B'
                 }
-                stopOpacity={lifeSupportHealing ? '0.55' : lifeSupportStable ? '0.38' : '0.14'}
+                stopOpacity={lifeSupportHealing ? '0.62' : lifeSupportStable ? '0.44' : '0.18'}
               />
-              <stop offset="100%" stopColor="#0F172A" stopOpacity="0.05" />
+              <stop offset="100%" stopColor="#0F172A" stopOpacity="0.22" />
             </radialGradient>
 
             <radialGradient id="habitatGlow" cx="50%" cy="60%" r="60%">
@@ -194,9 +235,9 @@ export function LunarOutpostVisualizer({
                     ? '#38BDF8'
                     : '#F59E0B'
                 }
-                stopOpacity={lifeSupportStable ? '0.45' : '0.28'}
+                stopOpacity={lifeSupportStable ? '0.5' : '0.32'}
               />
-              <stop offset="100%" stopColor="#0F172A" stopOpacity="0.08" />
+              <stop offset="100%" stopColor="#0F172A" stopOpacity="0.25" />
             </radialGradient>
 
             <radialGradient id="sunFlareGrad" cx="50%" cy="50%" r="50%">
@@ -208,31 +249,70 @@ export function LunarOutpostVisualizer({
                 stopOpacity="0"
               />
             </radialGradient>
+
+            <linearGradient id="groundPadShadow" x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" stopColor="#080D1D" stopOpacity="0.1" />
+              <stop offset="100%" stopColor="#080D1D" stopOpacity="0.65" />
+            </linearGradient>
           </defs>
 
-          <rect x="0" y="0" width="760" height="400" rx="20" fill="url(#spaceBg)" />
+          {/* Upgrade #1: Dynamic Telemetry HUD Gridlines & Camera Reticles */}
+          <g opacity="0.25" pointerEvents="none">
+            <line x1="0" y1="120" x2="760" y2="120" stroke="#38BDF8" strokeWidth="0.6" strokeDasharray="4 8" />
+            <line x1="0" y1="220" x2="760" y2="220" stroke="#38BDF8" strokeWidth="0.6" strokeDasharray="4 8" />
+            <line x1="190" y1="12" x2="190" y2="388" stroke="#38BDF8" strokeWidth="0.6" strokeDasharray="4 8" />
+            <line x1="570" y1="12" x2="570" y2="388" stroke="#38BDF8" strokeWidth="0.6" strokeDasharray="4 8" />
+          </g>
+          {/* Corner Camera Brackets */}
+          <g stroke="#67E8F9" strokeWidth="1.6" fill="none" opacity="0.7" pointerEvents="none">
+            <path d="M16,32 L16,16 L36,16" />
+            <path d="M724,16 L744,16 L744,32" />
+            <path d="M16,368 L16,384 L36,384" />
+            <path d="M724,384 L744,384 L744,368" />
+          </g>
+          {/* Site Lat/Long HUD Stamp */}
+          <text
+            x="44"
+            y="26"
+            fill="#A5F3FC"
+            fontSize="10"
+            fontWeight="700"
+            fontFamily="JetBrains Mono, monospace"
+            opacity="0.88"
+          >
+            {hudCoords}
+          </text>
+          <text
+            x="716"
+            y="26"
+            textAnchor="end"
+            fill="#94A3B8"
+            fontSize="10"
+            fontWeight="700"
+            fontFamily="JetBrains Mono, monospace"
+            opacity="0.85"
+          >
+            {isDayCycleActive ? `SOLAR CYCLE ${Math.round(sunProgress * 100)}%` : 'OPTICAL TELEMETRY'}
+          </text>
 
+          {/* Subtle Starfield over top sky */}
           {[
-            [60, 48, 1.5],
-            [125, 92, 1.2],
-            [190, 40, 2],
-            [270, 74, 1.3],
-            [340, 32, 1.8],
-            [420, 62, 1.2],
-            [495, 38, 1.5],
-            [560, 88, 1.4],
-            [640, 118, 1.7],
-            [700, 56, 1.5],
-            [88, 145, 1.2],
-            [310, 120, 1.1],
-            [465, 108, 1.3]
+            [60, 48, 1.4],
+            [125, 68, 1.1],
+            [190, 40, 1.6],
+            [270, 64, 1.2],
+            [340, 32, 1.5],
+            [420, 52, 1.1],
+            [495, 38, 1.4],
+            [560, 72, 1.2],
+            [700, 56, 1.4]
           ].map(([cx, cy, r], i) => (
-            <circle key={i} cx={cx} cy={cy} r={r} fill="#E2E8F0" opacity={0.45 + (i % 3) * 0.2} />
+            <circle key={i} cx={cx} cy={cy} r={r} fill="#E2E8F0" opacity={0.45 + (i % 3) * 0.18} />
           ))}
 
           {/* Distant Earth */}
-          <g transform="translate(650, 72)">
-            <circle cx="0" cy="0" r="24" fill="#1D4ED8" stroke="#60A5FA" strokeWidth="1.5" />
+          <g transform="translate(658, 72)">
+            <circle cx="0" cy="0" r="23" fill="#1D4ED8" stroke="#60A5FA" strokeWidth="1.5" />
             <path
               d="M-12,-10 Q-2,-16 8,-6 Q12,4 2,12 Q-10,14 -14,2 Z"
               fill="#34D399"
@@ -240,27 +320,27 @@ export function LunarOutpostVisualizer({
             />
             <path d="M8,-14 Q16,-8 14,4 Q8,8 4,2 Z" fill="#34D399" opacity="0.7" />
             <ellipse cx="-5" cy="-12" rx="10" ry="3" fill="#FFFFFF" opacity="0.4" />
-            <text x="0" y="38" textAnchor="middle" fill="#93C5FD" fontSize="11" fontWeight="700">
+            <text x="0" y="36" textAnchor="middle" fill="#BFDBFE" fontSize="10.5" fontWeight="700">
               EARTH
             </text>
           </g>
 
-          {/* Sun / Solar Flare Source */}
-          <g transform="translate(95, 72)">
+          {/* Upgrade #2: Arcing Sun / Solar Flare Source */}
+          <g transform={`translate(${sunX.toFixed(1)}, ${sunY.toFixed(1)})`}>
             <circle
               cx="0"
               cy="0"
-              r={showFlareStreaks ? 46 : 32}
+              r={showFlareStreaks ? 44 : 30}
               fill="url(#sunFlareGrad)"
               className="animate-pulse-glow"
             />
             <circle
               cx="0"
               cy="0"
-              r={showFlareStreaks ? 22 : 18}
+              r={showFlareStreaks ? 21 : 17}
               fill={showFlareStreaks ? '#FDA4AF' : '#FDE047'}
             />
-            <text x="0" y="42" textAnchor="middle" fill="#FDE68A" fontSize="11" fontWeight="700">
+            <text x="0" y="40" textAnchor="middle" fill="#FDE68A" fontSize="10.5" fontWeight="700">
               {showFlareStreaks ? `FLARE ${flareEvent.classType}` : 'SUN'}
             </text>
           </g>
@@ -270,46 +350,19 @@ export function LunarOutpostVisualizer({
             <line
               x1="418"
               y1="158"
-              x2="630"
+              x2="638"
               y2="88"
               stroke="#22D3EE"
               strokeWidth={isCommsTransmitting ? '3' : '1.5'}
               strokeDasharray="6 6"
             />
             {isCommsTransmitting && (
-              <circle cx="524" cy="123" r="7" fill="#22D3EE" className="animate-ping" />
+              <circle cx="528" cy="123" r="7" fill="#22D3EE" className="animate-ping" />
             )}
           </g>
 
-          {/* Surface Ground */}
-          <path
-            d="M0,296 Q190,264 380,278 Q570,292 760,268 L760,400 L0,400 Z"
-            fill="url(#surfaceGround)"
-          />
-          <ellipse
-            cx="105"
-            cy="346"
-            rx="48"
-            ry="12"
-            fill={isMars ? '#2A100B' : '#12182B'}
-            opacity="0.65"
-          />
-          <ellipse
-            cx="645"
-            cy="342"
-            rx="56"
-            ry="14"
-            fill={isMars ? '#2A100B' : '#12182B'}
-            opacity="0.6"
-          />
-          <ellipse
-            cx="385"
-            cy="358"
-            rx="34"
-            ry="8"
-            fill={isMars ? '#2A100B' : '#12182B'}
-            opacity="0.45"
-          />
+          {/* Subtle Outpost Pad Ground Shadow (lets photorealistic terrain show cleanly around it) */}
+          <ellipse cx="380" cy="296" rx="340" ry="48" fill="url(#groundPadShadow)" />
 
           {/* Corridors */}
           <rect
@@ -333,7 +386,52 @@ export function LunarOutpostVisualizer({
             strokeWidth="1.5"
           />
 
-          {/* HYDROPONICS GREENHOUSE POD (LEFT) */}
+          {/* Upgrade #2: Animated Power Bus Cables (Solar Array -> Habitat & Shield Emitter) */}
+          <g>
+            {/* Base conduit tracks */}
+            <path d="M580,276 L455,276" stroke="#1E293B" strokeWidth="5" strokeLinecap="round" />
+            <path d="M580,285 L380,285" stroke="#1E293B" strokeWidth="4" strokeLinecap="round" />
+
+            {/* Live Life Support Conduit Pulse */}
+            {power.lifeSupport > 0 && (
+              <path
+                d="M580,276 L455,276"
+                fill="none"
+                stroke={lifeSupportStable ? '#34D399' : '#FBBF24'}
+                strokeWidth={power.lifeSupport >= 45 ? '3' : '2'}
+                strokeDasharray="10 6"
+                opacity={Math.min(1, 0.35 + power.lifeSupport / 70)}
+                className="animate-power-bus"
+                style={{ animationDuration: `${lifeBusSpeedSec}s` }}
+              />
+            )}
+
+            {/* Live Shield Emitter Conduit Pulse */}
+            {power.shielding > 0 && (
+              <path
+                d="M580,285 L380,285"
+                fill="none"
+                stroke="#22D3EE"
+                strokeWidth={power.shielding >= 35 ? '3' : '2'}
+                strokeDasharray="10 6"
+                opacity={Math.min(1, 0.35 + power.shielding / 70)}
+                className="animate-power-bus"
+                style={{ animationDuration: `${shieldBusSpeedSec}s` }}
+              />
+            )}
+
+            {/* Junction / Shield Emitter Coil Node */}
+            <circle
+              cx="380"
+              cy="285"
+              r="5"
+              fill={power.shielding > 0 ? '#22D3EE' : '#475569'}
+              stroke="#0F172A"
+              strokeWidth="1.5"
+            />
+          </g>
+
+          {/* HYDROPONICS GREENHOUSE POD (LEFT) + Upgrade #6 Cutaway Details */}
           <g transform="translate(155, 250)">
             <rect
               x="-62"
@@ -351,6 +449,7 @@ export function LunarOutpostVisualizer({
               stroke={lifeSupportStable ? '#34D399' : '#FBBF24'}
               strokeWidth={lifeSupportStable ? '2.5' : '1.5'}
             />
+            {/* Tuned LED grow-light bar */}
             <path
               d="M-32,-20 Q0,-34 32,-20"
               fill="none"
@@ -372,6 +471,26 @@ export function LunarOutpostVisualizer({
               </g>
             ))}
 
+            {/* Upgrade #6: Fine Hydroponic Water Mist Droplets */}
+            {lifeSupportStable &&
+              [
+                [-34, -8, '0s'],
+                [-18, -12, '0.6s'],
+                [12, -10, '1.1s'],
+                [30, -6, '1.5s'],
+                [-4, -15, '0.9s']
+              ].map(([mx, my, delay], idx) => (
+                <circle
+                  key={`mist-${idx}`}
+                  cx={mx as number}
+                  cy={my as number}
+                  r="1.3"
+                  fill="#A5F3FC"
+                  className="animate-hydro-mist"
+                  style={{ animationDelay: delay as string }}
+                />
+              ))}
+
             {lifeSupportStable &&
               [
                 [-32, -2, 2.2, '0s'],
@@ -391,19 +510,20 @@ export function LunarOutpostVisualizer({
                 />
               ))}
 
+            <rect x="-58" y="45" width="116" height="17" rx="4" fill="#080D1D" opacity="0.78" />
             <text
               x="0"
-              y="58"
+              y="57"
               textAnchor="middle"
               fill={lifeSupportStable ? '#6EE7B7' : '#FCD34D'}
-              fontSize="12"
+              fontSize="11.5"
               fontWeight="700"
             >
               CSA HYDROPONICS
             </text>
           </g>
 
-          {/* HABITAT DOME (CENTER) */}
+          {/* HABITAT DOME (CENTER) + Upgrade #6 Cutaway Details */}
           <g transform="translate(380, 245)">
             <rect
               x="-82"
@@ -430,24 +550,50 @@ export function LunarOutpostVisualizer({
               strokeWidth="1"
               opacity="0.35"
             />
+
+            {/* Left Window + Astronaut Silhouette checking display */}
             <rect
-              x="-38"
-              y="-6"
-              width="24"
-              height="16"
+              x="-44"
+              y="-8"
+              width="28"
+              height="19"
               rx="5"
               fill={lifeSupportStable ? '#BAE6FD' : '#FDE68A'}
-              opacity={lifeSupportStable ? 0.9 : 0.55}
+              opacity={lifeSupportStable ? 0.92 : 0.6}
             />
+            <g fill="#0F172A" opacity="0.82">
+              <circle cx="-35" cy="0" r="2.6" />
+              <path d="M-39,11 Q-39,4 -35,4 Q-31,4 -31,11 Z" />
+              {/* Mini console screen */}
+              <rect x="-27" y="1" width="7" height="5" rx="1" fill="#0284C7" />
+            </g>
+
+            {/* Right Window + Second Astronaut & O2 Scrubber Gauge */}
             <rect
-              x="14"
-              y="-6"
-              width="24"
-              height="16"
+              x="16"
+              y="-8"
+              width="28"
+              height="19"
               rx="5"
               fill={lifeSupportStable ? '#BAE6FD' : '#FDE68A'}
-              opacity={lifeSupportStable ? 0.9 : 0.55}
+              opacity={lifeSupportStable ? 0.92 : 0.6}
             />
+            <g fill="#0F172A" opacity="0.82">
+              <circle cx="26" cy="0" r="2.6" />
+              <path d="M22,11 Q22,4 26,4 Q30,4 30,11 Z" />
+              {/* O2 Scrubber vertical bar */}
+              <rect x="34" y="-4" width="6" height="12" rx="1.2" fill="#0F172A" />
+              <rect
+                x="35"
+                y={lifeSupportStable ? '-2' : '3'}
+                width="4"
+                height={lifeSupportStable ? '9' : '4'}
+                rx="0.8"
+                fill={lifeSupportStable ? '#10B981' : '#F59E0B'}
+              />
+            </g>
+
+            {/* Central Airlock Door */}
             <rect
               x="-12"
               y="2"
@@ -458,6 +604,17 @@ export function LunarOutpostVisualizer({
               stroke="#38BDF8"
               strokeWidth="1.5"
             />
+            <text
+              x="0"
+              y="-14"
+              textAnchor="middle"
+              fill={lifeSupportStable ? '#A7F3D0' : '#FDE68A'}
+              fontSize="7.5"
+              fontWeight="800"
+              fontFamily="JetBrains Mono, monospace"
+            >
+              {lifeSupportStable ? 'O2 98%' : 'O2 LOW'}
+            </text>
 
             {/* Comms Dish */}
             <g transform="translate(32, -62)">
@@ -473,17 +630,18 @@ export function LunarOutpostVisualizer({
             </g>
 
             {lifeSupportHealing && !showRedRadiationFlash && (
-              <text x="0" y="-22" textAnchor="middle" fill="#6EE7B7" fontSize="11" fontWeight="700">
+              <text x="0" y="-26" textAnchor="middle" fill="#6EE7B7" fontSize="11" fontWeight="700">
                 +5% HEALING
               </text>
             )}
 
+            <rect x="-74" y="53" width="148" height="17" rx="4" fill="#080D1D" opacity="0.78" />
             <text
               x="0"
-              y="66"
+              y="65"
               textAnchor="middle"
               fill={lifeSupportStable ? '#7DD3FC' : '#FCD34D'}
-              fontSize="12"
+              fontSize="11.5"
               fontWeight="700"
             >
               LIFE SUPPORT ({power.lifeSupport} kW)
@@ -550,7 +708,8 @@ export function LunarOutpostVisualizer({
                 />
               ))}
 
-            <text x="0" y="58" textAnchor="middle" fill="#7DD3FC" fontSize="12" fontWeight="700">
+            <rect x="-66" y="45" width="132" height="17" rx="4" fill="#080D1D" opacity="0.78" />
+            <text x="0" y="57" textAnchor="middle" fill="#7DD3FC" fontSize="11.5" fontWeight="700">
               SOLAR GRID ({maxPowerBudget} kW)
             </text>
           </g>
@@ -581,12 +740,13 @@ export function LunarOutpostVisualizer({
                   opacity="0.65"
                 />
               )}
+              <rect x="260" y="81" width="240" height="20" rx="6" fill="#080D1D" opacity="0.75" />
               <text
                 x="380"
-                y="96"
+                y="95"
                 textAnchor="middle"
                 fill={showRedRadiationFlash ? '#FDA4AF' : shieldBright ? '#67E8F9' : '#93C5FD'}
-                fontSize="12"
+                fontSize="11.5"
                 fontWeight="800"
               >
                 SHIELD: {shieldStrength}% · {osdrDoseMsv} mSv/day
@@ -600,10 +760,10 @@ export function LunarOutpostVisualizer({
               {[0, 1, 2, 3].map((idx) => (
                 <line
                   key={idx}
-                  x1={115 + idx * 14}
-                  y1={85 + idx * 12}
-                  x2={185 + idx * 18}
-                  y2={140 + idx * 14}
+                  x1={sunX + 20 + idx * 14}
+                  y1={sunY + 14 + idx * 12}
+                  x2={sunX + 85 + idx * 18}
+                  y2={sunY + 68 + idx * 14}
                   stroke="#FB7185"
                   strokeWidth="4"
                   strokeLinecap="round"
@@ -617,7 +777,7 @@ export function LunarOutpostVisualizer({
       </div>
 
       {/* Bottom Status Strip & Simulation Progress Bar */}
-      <div className="px-5 pb-3.5 pt-2 border-t border-slate-800/80 bg-[#0E152A] shrink-0">
+      <div className="px-5 pb-3 pt-2 border-t border-slate-800/80 bg-[#0A0F1E] shrink-0">
         {phase === 'SIMULATING' || phase === 'CRISIS_PAUSE' ? (
           <div className="flex flex-col gap-1.5">
             <div className="flex items-center justify-between text-xs font-semibold">

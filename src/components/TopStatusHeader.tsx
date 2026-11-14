@@ -36,11 +36,19 @@ interface TopStatusHeaderProps {
   isLoadingDonki: boolean;
   floatingDeltas: FloatingDeltas | null;
   muted: boolean;
+  missionElapsedSec: number;
   onToggleMute: () => void;
   onOpenDonki: () => void;
   onOpenSources: () => void;
   onOpenHelp: () => void;
   onResetMission: () => void;
+}
+
+function formatMetClock(totalSeconds: number): string {
+  const hrs = Math.floor(totalSeconds / 3600);
+  const mins = Math.floor((totalSeconds % 3600) / 60);
+  const secs = totalSeconds % 60;
+  return [hrs, mins, secs].map((n) => String(n).padStart(2, '0')).join(':');
 }
 
 function getLifeSupportColors(value: number) {
@@ -70,6 +78,7 @@ export function TopStatusHeader({
   isLoadingDonki,
   floatingDeltas,
   muted,
+  missionElapsedSec,
   onToggleMute,
   onOpenDonki,
   onOpenSources,
@@ -82,17 +91,25 @@ export function TopStatusHeader({
   const isLive = dataSource === 'LIVE_NASA_API';
 
   return (
-    <header className="w-full rounded-2xl bg-[#111830] border border-slate-700/80 px-3.5 py-2.5 flex flex-wrap xl:flex-nowrap items-center justify-between gap-3 shrink-0">
-      {/* Brand & Sol Counter */}
+    <header className="w-full rounded-2xl bg-[#0E152B] border border-slate-700/80 px-3.5 py-2 flex flex-wrap xl:flex-nowrap items-center justify-between gap-2.5 shrink-0 shadow-[0_4px_20px_rgba(0,0,0,0.45)]">
+      {/* Brand, Sol Counter & MET Clock */}
       <div className="flex items-center gap-2.5 shrink-0">
         <div className="w-9 h-9 rounded-xl bg-cyan-500/15 border border-cyan-400/40 flex items-center justify-center text-cyan-300 shrink-0">
           <Rocket className="w-5 h-5" />
         </div>
         <div>
-          <h1 className="font-display font-bold text-sm sm:text-base text-white leading-tight whitespace-nowrap">
-            Junior Astronaut
-          </h1>
-          <div className="flex items-center gap-1.5 text-xs text-cyan-300 font-mono-tabular font-bold">
+          <div className="flex items-center gap-2">
+            <h1 className="font-display font-bold text-sm sm:text-base text-white leading-tight whitespace-nowrap">
+              Junior Astronaut
+            </h1>
+            <span
+              className="instrument-bezel px-1.5 py-0.5 rounded border border-slate-700/80 font-mono-tabular text-[10px] font-bold text-cyan-300 tracking-tight whitespace-nowrap"
+              title="Mission Elapsed Time"
+            >
+              MET T+ {formatMetClock(missionElapsedSec)}
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5 text-xs text-cyan-300 font-mono-tabular font-bold mt-0.5">
             <span>
               <GlossaryTerm term="Sol">SOL</GlossaryTerm> {sol} / {totalSols}
             </span>
@@ -106,10 +123,10 @@ export function TopStatusHeader({
         </div>
       </div>
 
-      {/* 3 Core Resource Gauges */}
-      <div className="grid grid-cols-3 gap-3 sm:gap-4 flex-1 min-w-[290px] max-w-2xl">
+      {/* 3 Core Resource Gauges in Recessed Aerospace Instrument Bezels */}
+      <div className="grid grid-cols-3 gap-2.5 sm:gap-3 flex-1 min-w-[290px] max-w-2xl">
         {/* 1. Power Grid */}
-        <div className="flex flex-col gap-1">
+        <div className="instrument-bezel rounded-xl border border-slate-800 px-2.5 py-1.5 flex flex-col gap-1">
           <div className="flex items-center justify-between text-xs font-semibold">
             <span className="flex items-center gap-1 text-slate-200 whitespace-nowrap">
               <Zap className="w-3.5 h-3.5 text-amber-400 shrink-0" />
@@ -120,16 +137,16 @@ export function TopStatusHeader({
               {remainingPowerKw} kW free
             </span>
           </div>
-          <div className="h-2.5 w-full rounded-full bg-slate-800/90 overflow-hidden border border-slate-700/70">
+          <div className="h-2 w-full rounded-full bg-slate-900 overflow-hidden border border-slate-800">
             <div
-              className="h-full rounded-full transition-all duration-300 bg-amber-400"
+              className="h-full rounded-full transition-all duration-300 bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.45)]"
               style={{ width: `${powerPct}%` }}
             />
           </div>
         </div>
 
         {/* 2. Life Support (O2, Heat & Food) */}
-        <div className="relative flex flex-col gap-1">
+        <div className="instrument-bezel relative rounded-xl border border-slate-800 px-2.5 py-1.5 flex flex-col gap-1">
           <div className="flex items-center justify-between text-xs font-semibold">
             <span className="flex items-center gap-1 text-slate-200 whitespace-nowrap">
               <HeartPulse className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
@@ -156,7 +173,7 @@ export function TopStatusHeader({
               </span>
             </div>
           </div>
-          <div className="h-2.5 w-full rounded-full bg-slate-800/90 overflow-hidden border border-slate-700/70">
+          <div className="h-2 w-full rounded-full bg-slate-900 overflow-hidden border border-slate-800">
             <div
               className={`h-full rounded-full transition-all duration-300 ${lifeColors.bar}`}
               style={{ width: `${lifeSupportLevel}%` }}
@@ -165,7 +182,7 @@ export function TopStatusHeader({
         </div>
 
         {/* 3. Radiation Shielding + NASA OSDR mSv/day */}
-        <div className="flex flex-col gap-1">
+        <div className="instrument-bezel rounded-xl border border-slate-800 px-2.5 py-1.5 flex flex-col gap-1">
           <div className="flex items-center justify-between text-xs font-semibold">
             <span className="flex items-center gap-1 text-slate-200 whitespace-nowrap">
               <Shield className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
@@ -176,7 +193,7 @@ export function TopStatusHeader({
               {shieldStrength}% · {osdrDoseMsv} mSv/d
             </span>
           </div>
-          <div className="h-2.5 w-full rounded-full bg-slate-800/90 overflow-hidden border border-slate-700/70">
+          <div className="h-2 w-full rounded-full bg-slate-900 overflow-hidden border border-slate-800">
             <div
               className={`h-full rounded-full transition-all duration-300 ${shieldColors.bar}`}
               style={{ width: `${shieldStrength}%` }}

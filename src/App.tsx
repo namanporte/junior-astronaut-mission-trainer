@@ -96,6 +96,7 @@ export default function App() {
   } | null>(null);
   const [showDonkiModal, setShowDonkiModal] = useState<boolean>(false);
   const [muted, setMuted] = useState<boolean>(false);
+  const [missionElapsedSec, setMissionElapsedSec] = useState<number>(0);
 
   const totalSols = getTotalSolsForMode(mode);
   const currentFlare = donkiEvents[sol - 1] ?? NASA_ARCHIVE_FALLBACK_EVENTS[0];
@@ -158,6 +159,14 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (phase === 'ONBOARDING' || phase === 'VICTORY' || phase === 'GAME_OVER') return;
+    const metTimer = window.setInterval(() => {
+      setMissionElapsedSec((prev) => prev + 1);
+    }, 1000);
+    return () => window.clearInterval(metTimer);
+  }, [phase]);
+
   const remainingPowerKw = Math.max(0, maxPowerBudget - getTotalAllocatedPower(power));
   const shieldStrength = getShieldStrength(power.shielding);
   const osdrDoseMsv = getOsdrDoseRateMsv(power.shielding, currentFlare);
@@ -208,6 +217,7 @@ export default function App() {
     soundEngine.unlock();
     soundEngine.playSolSurvivedChime();
     applyBudgetForMode(mode, selectedMarsSite);
+    setMissionElapsedSec(0);
     setPhase('PLANNING');
   }, [mode, selectedMarsSite, applyBudgetForMode]);
 
@@ -216,6 +226,7 @@ export default function App() {
     soundEngine.playSolSurvivedChime();
     const budget = mode === 'COMMANDER' ? selectedMarsSite.basePowerBudget : DEFAULT_MAX_POWER;
     setSol(1);
+    setMissionElapsedSec(0);
     setLifeSupportLevel(INITIAL_LIFE_SUPPORT);
     setMaxPowerBudget(budget);
     setPower(clampAllocationToBudget(INITIAL_POWER, budget));
@@ -578,6 +589,7 @@ export default function App() {
           isLoadingDonki={isLoadingDonki}
           floatingDeltas={floatingDeltas}
           muted={muted}
+          missionElapsedSec={missionElapsedSec}
           onToggleMute={handleToggleMute}
           onOpenDonki={() => {
             soundEngine.playSliderTick(48);

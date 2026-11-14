@@ -46,41 +46,75 @@ class SpaceSoundEngine {
     osc.stop(now + 0.06);
   }
 
-  // 2a. Ascending two-tone telemetry ping when clicking "Ask Earth Control"
+  // 2. Synthesized bandpass white-noise radio squelch click (DSN / UHF comms)
+  public playRadioSquelch(durationSec = 0.075) {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const frameCount = Math.max(1, Math.floor(ctx.sampleRate * durationSec));
+    const buffer = ctx.createBuffer(1, frameCount, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < frameCount; i++) {
+      data[i] = (Math.random() * 2 - 1) * 0.6;
+    }
+
+    const noise = ctx.createBufferSource();
+    noise.buffer = buffer;
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(1850, now);
+    filter.Q.setValueAtTime(1.4, now);
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.08, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + durationSec);
+
+    noise.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+
+    noise.start(now);
+    noise.stop(now + durationSec + 0.01);
+  }
+
+  // 2a. Ascending two-tone telemetry ping + radio squelch when clicking "Ask Earth Control"
   public playCommsPing() {
     const ctx = this.ensureContext();
     if (!ctx) return;
+    this.playRadioSquelch(0.075);
     const now = ctx.currentTime;
     [587.33, 880].forEach((freq, idx) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = 'triangle';
-      osc.frequency.setValueAtTime(freq, now + idx * 0.11);
-      gain.gain.setValueAtTime(0.07, now + idx * 0.11);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.11 + 0.16);
+      osc.frequency.setValueAtTime(freq, now + 0.05 + idx * 0.11);
+      gain.gain.setValueAtTime(0.07, now + 0.05 + idx * 0.11);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05 + idx * 0.11 + 0.16);
       osc.connect(gain);
       gain.connect(ctx.destination);
-      osc.start(now + idx * 0.11);
-      osc.stop(now + idx * 0.11 + 0.18);
+      osc.start(now + 0.05 + idx * 0.11);
+      osc.stop(now + 0.05 + idx * 0.11 + 0.18);
     });
   }
 
-  // 2b. Crisp radio confirmation chirp when 4-second signal returns
+  // 2b. Crisp radio squelch + confirmation chirp when signal returns
   public playCommsReturnChirp() {
     const ctx = this.ensureContext();
     if (!ctx) return;
+    this.playRadioSquelch(0.085);
     const now = ctx.currentTime;
     [987.77, 1318.5].forEach((freq, idx) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = 'sine';
-      osc.frequency.setValueAtTime(freq, now + idx * 0.07);
-      gain.gain.setValueAtTime(0.07, now + idx * 0.07);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.07 + 0.12);
+      osc.frequency.setValueAtTime(freq, now + 0.06 + idx * 0.07);
+      gain.gain.setValueAtTime(0.07, now + 0.06 + idx * 0.07);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.06 + idx * 0.07 + 0.12);
       osc.connect(gain);
       gain.connect(ctx.destination);
-      osc.start(now + idx * 0.07);
-      osc.stop(now + idx * 0.07 + 0.13);
+      osc.start(now + 0.06 + idx * 0.07);
+      osc.stop(now + 0.06 + idx * 0.07 + 0.13);
     });
   }
 

@@ -176,6 +176,37 @@ input[type='range'].space-slider::-moz-range-thumb {
   }
 }
 
+@keyframes powerBusFlow {
+  from {
+    stroke-dashoffset: 32;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes dsnBarPulse {
+  0%, 100% {
+    transform: scaleY(0.35);
+    opacity: 0.55;
+  }
+  50% {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+
+@keyframes hydroMist {
+  0%, 100% {
+    transform: translateY(0px) scale(0.85);
+    opacity: 0.25;
+  }
+  50% {
+    transform: translateY(-4px) scale(1.1);
+    opacity: 0.8;
+  }
+}
+
 .animate-pulse-glow {
   animation: pulseGlow 2.2s ease-in-out infinite;
 }
@@ -204,6 +235,27 @@ input[type='range'].space-slider::-moz-range-thumb {
   animation: floatDeltaFade 2.6s ease-out forwards;
 }
 
+.animate-power-bus {
+  animation: powerBusFlow 1.1s linear infinite;
+}
+
+.animate-dsn-bar {
+  transform-origin: bottom;
+  animation: dsnBarPulse 0.85s ease-in-out infinite;
+}
+
+.animate-hydro-mist {
+  animation: hydroMist 2.2s ease-in-out infinite;
+}
+
+/* Aerospace recessed instrument housing */
+.instrument-bezel {
+  background-color: #0A0F1E;
+  box-shadow:
+    inset 0 2px 6px rgba(0, 0, 0, 0.7),
+    inset 0 -1px 0 rgba(148, 163, 184, 0.1);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-pulse-glow,
   .animate-hex-shimmer,
@@ -211,7 +263,10 @@ input[type='range'].space-slider::-moz-range-thumb {
   .animate-greenhouse-particle,
   .animate-solar-dust,
   .animate-outpost-shake,
-  .animate-float-delta {
+  .animate-float-delta,
+  .animate-power-bus,
+  .animate-dsn-bar,
+  .animate-hydro-mist {
     animation: none;
   }
 }
