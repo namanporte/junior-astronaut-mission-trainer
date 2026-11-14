@@ -2,22 +2,27 @@ import {
   CommanderRank,
   CommsTarget,
   DifficultyMode,
+  FlareSeverity,
   PowerAllocation,
-  SolarFlareEvent
+  SolarFlareEvent,
+  WorldBody
 } from '../types/game';
+import { getFlareNickname } from '../utils/physicsSimulation';
 
 export interface CapcomDebriefInput {
   sol: number;
+  world: WorldBody;
   mode: DifficultyMode;
-  lifeSupportKw: number;
+  electrolysisKw: number;
+  growHeatKw: number;
   shieldingKw: number;
-  classType: string;
-  sourceLocation: string;
+  severityLevel: FlareSeverity;
   requiredShieldKw: number;
-  osdrDoseMsv: number;
-  lifeSupportChange: number;
-  lifeSupportLevel: number;
-  cropPenaltyTriggered: boolean;
+  waterO2Pct: number;
+  cropsPct: number;
+  cabinTempC: number;
+  co2Ppm: number;
+  sunBlanketSaved?: boolean;
 }
 
 export interface CapcomResponse {
@@ -56,49 +61,58 @@ async function postCapcomEndpoint(
 }
 
 function buildFallbackDebrief(input: CapcomDebriefInput): string {
-  const shieldHeld = input.shieldingKw >= input.requiredShieldKw;
+  const flareName = getFlareNickname(input.severityLevel);
+  const shieldHeld = input.shieldingKw >= input.requiredShieldKw || input.sunBlanketSaved;
 
+  if (input.sunBlanketSaved) {
+    return `Smart emergency move on ${input.world}! Your Sun-Bounce Blanket deflected the ${flareName} while keeping Air/Water (${input.waterO2Pct}%) steady!`;
+  }
   if (!shieldHeld) {
-    return `Heads up, Commander! Radiation Shielding (${input.shieldingKw} kW) needed ${input.requiredShieldKw} kW to block the ${input.classType} flare, so boost Shields next storm.`;
+    return `Storm impact on Sol ${input.sol}! Forcefield needed ${input.requiredShieldKw}⚡ against the ${flareName}—check your radiators & Shield next shift!`;
   }
-  if (input.cropPenaltyTriggered) {
-    return `Your ${input.shieldingKw} kW shields stopped the ${input.classType} flare! Because Life Support dipped low, give Hydroponics extra power tomorrow to recover crop yields.`;
+  if (input.cabinTempC >= 36) {
+    return `Storm blocked! Careful though—cabin hit ${input.cabinTempC}°C inside the vacuum walls. Walk to the Thermal Lab next shift!`;
   }
-  return `Great balancing on Sol ${input.sol}! Your ${input.shieldingKw} kW Radiation Shielding blocked the ${input.classType} flare while Life Support kept air, heat, and crops thriving.`;
+  if (input.co2Ppm >= 1800) {
+    return `Forcefield held! Watch out for ${input.co2Ppm} ppm CO2 though—visit Air & Water Bay to bake out those scrubbers!`;
+  }
+  return `Solid shift on ${input.world} Sol ${input.sol}! Your ${input.shieldingKw}⚡ Forcefield blocked the ${flareName} with ${input.waterO2Pct}% Water/O2!`;
 }
 
 function buildFallbackHint(
   upcomingFlare: SolarFlareEvent,
   currentSliders: PowerAllocation,
-  requiredLifeSupportKw: number
+  reqElecKw: number,
+  reqGrowKw: number
 ): string {
-  if (currentSliders.shielding < upcomingFlare.requiredShieldKw) {
-    return `Houston here! Slide Radiation Shielding up to ${upcomingFlare.requiredShieldKw} kW before the ${upcomingFlare.classType} flare hits!`;
+  const flareName = getFlareNickname(upcomingFlare.severityLevel);
+  if (currentSliders.shieldingKw < upcomingFlare.requiredShieldKw) {
+    return `Earth Buddy: Boost Forcefield to ${upcomingFlare.requiredShieldKw}⚡ before today’s ${flareName} arrives!`;
   }
-  if (currentSliders.lifeSupport < requiredLifeSupportKw) {
-    return `Mission Control tip: Raise Life Support to ${requiredLifeSupportKw} kW so your hydroponic crops and crew stay strong!`;
+  if (currentSliders.electrolysisKw < reqElecKw) {
+    return `Earth Buddy: Give Air & Water Electrolysis at least ${reqElecKw}⚡ or O2 & CO2 will suffer!`;
   }
-  return `Houston confirms your shields and Life Support look strong for the ${upcomingFlare.classType} flare — great work!`;
+  if (currentSliders.growHeatKw < reqGrowKw) {
+    return `Earth Buddy: Grow Lights & Heaters need ${reqGrowKw}⚡ to keep crops alive and batteries warm!`;
+  }
+  return `Earth Buddy: All systems balanced for today’s ${flareName}—keep patrolling for surprises!`;
 }
 
 function buildFallbackVictoryCommendation(params: {
-  finalLifeSupport: number;
+  finalWaterO2: number;
+  finalCrops: number;
   totalSols: number;
-  avgShielding: number;
-  avgLifeSupport: number;
+  world: WorldBody;
 }): string {
-  const { finalLifeSupport, totalSols, avgShielding, avgLifeSupport } = params;
-  if (avgShielding >= avgLifeSupport && finalLifeSupport >= 75) {
-    return `Outstanding safety-first command across all ${totalSols} Sols! You shielded the outpost from real NASA solar flares and finished at ${finalLifeSupport}% Life Support.`;
-  }
-  return `Congratulations on surviving all ${totalSols} Sols! Your smart tradeoffs between Life Support and Radiation Shielding kept the outpost thriving.`;
+  return `Mission Accomplished on ${params.world}! You walked the base, beat real space hazards across ${params.totalSols} Sols, and finished with ${params.finalWaterO2}% Water/O2 and ${params.finalCrops}% Crops!`;
 }
 
 export async function generateSolDebriefFeedback(
   gameState: CapcomDebriefInput
 ): Promise<CapcomResponse> {
   const aiText = await postCapcomEndpoint('/api/capcom/debrief', {
-    ...gameState
+    ...gameState,
+    stormName: getFlareNickname(gameState.severityLevel)
   });
 
   if (aiText) {
@@ -113,20 +127,18 @@ export async function generateSolDebriefFeedback(
 export async function generateEarthCommsHint(
   upcomingFlare: SolarFlareEvent,
   currentSliders: PowerAllocation,
-  requiredLifeSupportKw: number,
+  reqElecKw: number,
+  reqGrowKw: number,
   commsTarget: CommsTarget
 ): Promise<CapcomResponse> {
   const aiText = await postCapcomEndpoint('/api/capcom/hint', {
     upcomingFlare: {
-      classType: upcomingFlare.classType,
-      sourceLocation: upcomingFlare.sourceLocation,
+      stormName: getFlareNickname(upcomingFlare.severityLevel),
       requiredShieldKw: upcomingFlare.requiredShieldKw
     },
-    currentSliders: {
-      lifeSupportKw: currentSliders.lifeSupport,
-      shieldingKw: currentSliders.shielding
-    },
-    requiredLifeSupportKw,
+    currentSliders,
+    requiredLifeSupportKw: reqElecKw,
+    requiredGrowHeatKw: reqGrowKw,
     commsTarget
   });
 
@@ -134,18 +146,17 @@ export async function generateEarthCommsHint(
     return { text: aiText, isAiGenerated: true };
   }
   return {
-    text: buildFallbackHint(upcomingFlare, currentSliders, requiredLifeSupportKw),
+    text: buildFallbackHint(upcomingFlare, currentSliders, reqElecKw, reqGrowKw),
     isAiGenerated: false
   };
 }
 
 export async function generateVictoryCommendation(params: {
-  finalLifeSupport: number;
+  finalWaterO2: number;
+  finalCrops: number;
   totalSols: number;
   rank: CommanderRank;
-  avgLifeSupport: number;
-  avgShielding: number;
-  mode: DifficultyMode;
+  world: WorldBody;
   siteName: string;
 }): Promise<CapcomResponse> {
   const aiText = await postCapcomEndpoint('/api/capcom/victory', params);

@@ -1,63 +1,106 @@
-import { MarsSite } from '../types/game';
+import { MarsSite, StationMeta } from '../types/game';
 
 export type GlossaryTermKey =
   | 'Sol'
-  | 'Radiation Dose'
-  | 'Solar Flare'
-  | 'Comms Delay'
-  | 'Hydroponics';
+  | 'Electrolysis'
+  | 'Perchlorates'
+  | 'Vacuum Radiator'
+  | 'Forcefield'
+  | 'Regolith Dust';
 
 export const GLOSSARY_TERMS: Record<GlossaryTermKey, string> = {
-  Sol: 'One full day-and-night cycle on Mars (24h 39m) or a lunar shift.',
-  'Radiation Dose': 'Invisible space energy measured in mSv/day that shields must block.',
-  'Solar Flare': 'A sudden burst of bright energy and particles erupting from the Sun.',
-  'Comms Delay': 'Time it takes radio waves at light speed to reach Earth and return.',
-  Hydroponics: 'Growing fresh astronaut food in water and nutrients without any soil.'
+  Sol: 'One full planetary day! On Mars a Sol lasts 24 hours and 39 minutes—almost like an Earth day.',
+  Electrolysis:
+    'Splitting recycled water with electricity to make breathable Oxygen (O2)! That is why a broken water purifier hurts both water and air at once.',
+  Perchlorates:
+    'Toxic chlorine salts packed inside real Martian dirt! Crops cannot grow in it unless we wash it thoroughly first.',
+  'Vacuum Radiator':
+    'Empty space has no air to carry heat away, so habitats are like giant thermos flasks. External radiators glow and beam excess heat out into space!',
+  Forcefield:
+    'A magnetic energy dome powered by your base grid that bends dangerous solar storm particles safely away from the domes.',
+  'Regolith Dust':
+    'Razor-sharp, jagged Moon and Mars rock powder that never gets worn smooth by rain—it clings to solar panels and grinds into robot joints.'
 };
 
-/**
- * Curated facts grounded in the Canadian Space Agency (CSA)
- * "Food Production on the Moon" closed-loop hydroponic crop research.
- */
-export const CSA_LUNAR_FOOD_FACTS: string[] = [
-  'CSA Lunar Greenhouse Fact: Compact dwarf wheat and leafy greens grow cleanly in hydroponic water trays without heavy Moon dirt.',
-  'CSA Lunar Greenhouse Fact: Tuned red and blue LED lights help astronauts grow crisp lettuce using far less electricity.',
-  'CSA Lunar Greenhouse Fact: Closed-loop lunar greenhouses recycle up to 95% of plant water vapor back into clean crew drinking water.',
-  'CSA Lunar Greenhouse Fact: Microgreens sprout in just 7–10 days, giving astronauts fast vitamins when supply rockets are far away.',
-  'CSA Lunar Greenhouse Fact: Hydroponic plants naturally scrub carbon dioxide from cabin air while releasing fresh oxygen to breathe.',
-  'CSA Lunar Greenhouse Fact: Automated nutrient sensors monitor plant roots continuously so crops stay healthy even during solar storms.',
-  'CSA Lunar Greenhouse Fact: Growing fresh vegetables in orbit or on the Moon boosts astronaut morale alongside nutrition.'
+export const BASE_STATIONS: StationMeta[] = [
+  {
+    id: 'SOLAR_GRID',
+    name: 'Solar & Cryo-Battery Yard',
+    shortName: 'Solar Yard',
+    role: 'Power generation, regolith dust scrubbing, -130°C battery heaters & overload breakers',
+    position: [-12.5, 0, -8.5],
+    accentHex: '#F59E0B'
+  },
+  {
+    id: 'LIFE_SUPPORT',
+    name: 'Air & Water Electrolysis Bay',
+    shortName: 'Air & Water',
+    role: 'Water-to-O2 electrolysis tanks, CO2 scrubbers & hull airlock seal checks',
+    position: [12.5, 0, -8.5],
+    accentHex: '#0EA5E9'
+  },
+  {
+    id: 'HYDROPONICS',
+    name: 'Hydroponics Bio-Dome',
+    shortName: 'Bio-Dome',
+    role: 'Grow lights, crop biocontamination shields & Martian perchlorate soil washers',
+    position: [-12.5, 0, 9.5],
+    accentHex: '#10B981'
+  },
+  {
+    id: 'THERMAL_WORKSHOP',
+    name: 'Radiator & 3D Workshop',
+    shortName: 'Thermal & 3D Lab',
+    role: 'External vacuum cooling radiators, thermal loops & 3D-printed custom valves',
+    position: [12.5, 0, 9.5],
+    accentHex: '#F97316'
+  },
+  {
+    id: 'COMMAND_BRIDGE',
+    name: 'Command Hub & Shield Spire',
+    shortName: 'Command Hub',
+    role: 'Forcefield emitter spire, Sun-Storm Radar, power distribution & Earth radio',
+    position: [0, 0, 0],
+    accentHex: '#3B82F6'
+  }
 ];
 
-/**
- * Real NASA Mars Trek elevation & dust profiles for Commander Mode site selection.
- */
 export const MARS_TREK_SITES: MarsSite[] = [
   {
     id: 'JEZERO',
-    name: 'Jezero Crater',
-    elevationLabel: '-2,500 m (Ancient Lakebed)',
+    name: 'Jezero Delta Ridge',
+    elevationLabel: 'Ancient Lakebed (-2.5 km)',
     dustCondition: 'Moderate Dust',
-    basePowerBudget: 95,
+    basePowerBudget: 105,
     lifeSupportExtraKw: 0,
-    description: 'Balanced crater basin with steady sunlight and mild afternoon dust.'
+    description: 'Flat crater lakebed with steady sunlight and rich clays—but perchlorates lurk in the soil.'
   },
   {
     id: 'OLYMPUS',
-    name: 'Olympus Mons Slope',
-    elevationLabel: '+14,000 m (High Volcano)',
-    dustCondition: 'Clear Thin Air',
-    basePowerBudget: 100,
+    name: 'Olympus High Plateau',
+    elevationLabel: 'High Ridge (+12 km)',
+    dustCondition: 'Crisp Sun, Freezing Night',
+    basePowerBudget: 115,
     lifeSupportExtraKw: 5,
-    description: 'Bright 100 kW solar power, but freezing high altitude needs +5 kW heat.'
+    description: 'Thin air means bright solar power (+115⚡), but brutal -130°C cold nights tax heaters!'
   },
   {
     id: 'HELLAS',
-    name: 'Hellas Planitia',
-    elevationLabel: '-7,152 m (Deep Basin)',
-    dustCondition: 'Heavy Dust Swirls',
-    basePowerBudget: 85,
-    lifeSupportExtraKw: 0,
-    description: 'Deep basin dust cuts solar grid to 85 kW—tight power tradeoffs!'
+    name: 'Hellas Deep Basin',
+    elevationLabel: 'Deep Crater (-7 km)',
+    dustCondition: 'Heavy Red Dust Storms',
+    basePowerBudget: 95,
+    lifeSupportExtraKw: 5,
+    description: 'Thick red dust coats solar wings fast—stay sharp with cleaning & 3D-printed spares!'
   }
+];
+
+export const SPACE_PHYSICS_FACTS: string[] = [
+  'Water = Air in Space! Bases use electricity (electrolysis) to split recycled H2O into breathable oxygen—losing water means losing air too.',
+  'Space is a giant thermos bottle! With no air outside, servers and astronauts overheat rapidly unless external radiator fins beam heat into space.',
+  'Moon and Mars dust has zero wind erosion from rain, making every speck sharp like tiny glass shards that grind down seals and coat solar panels.',
+  'Martian dirt contains toxic perchlorate salts—real astronauts must chemically wash soil or grow veggies purely in misting water tubes!',
+  'At -130°C lunar nights, lithium batteries freeze and lose voltage unless precious power keeps their thermal blankets warm.',
+  'When CO2 scrubbers clog, astronauts lose focus and get dizzy before noticing—keeping scrubbers baked out saves your brainpower!',
+  'Because Mars resupply rockets only launch every 6–9 months, 3D printers are lifelines for making broken custom valves on the spot.'
 ];

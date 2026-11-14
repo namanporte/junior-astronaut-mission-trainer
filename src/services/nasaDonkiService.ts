@@ -64,18 +64,18 @@ export function classifyFlare(classType: string): {
 }
 
 function buildKidSummary(
-  classType: string,
-  sourceLocation: string,
+  _classType: string,
+  _sourceLocation: string,
   severityLevel: FlareSeverity,
   requiredShieldKw: number
 ): string {
   if (severityLevel === 'EXTREME') {
-    return `Giant ${classType} super-flare erupting from Sun region ${sourceLocation}! Needs ${requiredShieldKw} kW of shielding.`;
+    return `WHOA! A Monster Sun Blast is zooming toward your base! Power your Forcefield to ${requiredShieldKw}⚡!`;
   }
   if (severityLevel === 'MODERATE') {
-    return `Strong ${classType} solar flare detected at ${sourceLocation}! Needs ${requiredShieldKw} kW of active shielding.`;
+    return `Heads up! A Medium Solar Storm is heading our way. Keep at least ${requiredShieldKw}⚡ in your Forcefield!`;
   }
-  return `Mild ${classType} solar flare from region ${sourceLocation}. Keep at least ${requiredShieldKw} kW in shielding.`;
+  return `Just a Tiny Sun Burp today! ${requiredShieldKw}⚡ in your Forcefield easily keeps your crew cozy.`;
 }
 
 function normalizeRawFlare(raw: RawDonkiFlare): SolarFlareEvent | null {

@@ -48,7 +48,7 @@ export function GlossaryTerm({ term, children }: GlossaryTermProps) {
           e.stopPropagation();
           setOpen((prev) => !prev);
         }}
-        className="border-b-2 border-dotted border-cyan-400 text-cyan-200 hover:text-cyan-100 font-semibold cursor-help focus-visible:outline-2 focus-visible:outline-cyan-300 rounded-xs"
+        className="inline-block border-b-2 border-dotted border-sky-500 text-sky-700 hover:text-sky-900 hover:scale-[1.03] font-bold cursor-help transition-all duration-150 focus-visible:outline-2 focus-visible:outline-sky-500 rounded-xs"
         aria-expanded={open}
       >
         {children ?? term}
@@ -57,10 +57,10 @@ export function GlossaryTerm({ term, children }: GlossaryTermProps) {
       {open && (
         <span
           role="tooltip"
-          className="absolute z-50 left-1/2 -translate-x-1/2 bottom-full mb-2 w-60 rounded-xl bg-[#0A1328] border border-cyan-400/70 shadow-[0_8px_28px_rgba(0,0,0,0.65)] px-3 py-2 text-left pointer-events-none"
+          className="animate-modal-pop absolute z-50 left-1/2 -translate-x-1/2 bottom-full mb-2 w-60 rounded-2xl bg-slate-900 border-2 border-sky-400 shadow-xl px-3.5 py-2.5 text-left pointer-events-none"
         >
-          <span className="block text-[11px] font-bold text-cyan-300 mb-0.5">{term}</span>
-          <span className="block text-xs text-slate-100 leading-snug font-normal">
+          <span className="block text-xs font-extrabold text-sky-300 mb-0.5">{term}</span>
+          <span className="block text-xs text-white leading-snug font-medium">
             {definition}
           </span>
         </span>
