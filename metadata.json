@@ -1,0 +1,6 @@
+{
+  "name": "Junior Astronaut: Lunar Outpost",
+  "description": "An interactive educational space simulation game for kids ages 7–12. Balance 100 kW of lunar base power, handle solar flares, and survive 7 Sols.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

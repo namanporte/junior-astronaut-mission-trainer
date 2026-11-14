@@ -1,0 +1,217 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-display: 'Outfit', system-ui, sans-serif;
+    --font-sans: 'Plus Jakarta Sans', system-ui, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: #0B1021;
+    color: #F1F5F9;
+  }
+
+  h1, h2, h3, .font-display {
+    font-family: var(--font-display);
+  }
+
+  .font-mono-tabular {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Custom kid-friendly range slider styling */
+input[type='range'].space-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+input[type='range'].space-slider:focus {
+  outline: none;
+}
+
+input[type='range'].space-slider::-webkit-slider-runnable-track {
+  height: 11px;
+  border-radius: 9999px;
+}
+
+input[type='range'].space-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 24px;
+  width: 24px;
+  border-radius: 9999px;
+  background: #F8FAFC;
+  border: 3px solid var(--slider-accent, #22D3EE);
+  box-shadow: 0 0 12px var(--slider-glow, rgba(34, 211, 238, 0.55));
+  margin-top: -6.5px;
+  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+input[type='range'].space-slider:hover::-webkit-slider-thumb {
+  transform: scale(1.1);
+}
+
+input[type='range'].space-slider:active::-webkit-slider-thumb {
+  transform: scale(1.15);
+}
+
+input[type='range'].space-slider::-moz-range-track {
+  height: 11px;
+  border-radius: 9999px;
+}
+
+input[type='range'].space-slider::-moz-range-thumb {
+  height: 24px;
+  width: 24px;
+  border-radius: 9999px;
+  background: #F8FAFC;
+  border: 3px solid var(--slider-accent, #22D3EE);
+  box-shadow: 0 0 12px var(--slider-glow, rgba(34, 211, 238, 0.55));
+  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes pulseGlow {
+  0%, 100% {
+    opacity: 0.72;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes hexShimmer {
+  0%, 100% {
+    opacity: 0.22;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@keyframes flareStreak {
+  0% {
+    transform: translate(-30px, -30px) scale(0.8);
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate(110px, 95px) scale(1.1);
+    opacity: 0;
+  }
+}
+
+@keyframes greenhouseParticle {
+  0% {
+    transform: translateY(8px);
+    opacity: 0;
+  }
+  30% {
+    opacity: 0.9;
+  }
+  100% {
+    transform: translateY(-28px);
+    opacity: 0;
+  }
+}
+
+@keyframes solarDustSweep {
+  0% {
+    transform: translateX(-35px);
+    opacity: 0;
+  }
+  30% {
+    opacity: 0.75;
+  }
+  100% {
+    transform: translateX(48px);
+    opacity: 0;
+  }
+}
+
+@keyframes outpostShake {
+  0%, 100% {
+    transform: translate(0, 0);
+  }
+  15% {
+    transform: translate(-6px, 2px);
+  }
+  30% {
+    transform: translate(6px, -3px);
+  }
+  45% {
+    transform: translate(-5px, -2px);
+  }
+  60% {
+    transform: translate(5px, 2px);
+  }
+  75% {
+    transform: translate(-3px, 1px);
+  }
+}
+
+@keyframes floatDeltaFade {
+  0% {
+    transform: translateY(6px);
+    opacity: 0;
+  }
+  20% {
+    transform: translateY(0px);
+    opacity: 1;
+  }
+  80% {
+    transform: translateY(-6px);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-12px);
+    opacity: 0;
+  }
+}
+
+.animate-pulse-glow {
+  animation: pulseGlow 2.2s ease-in-out infinite;
+}
+
+.animate-hex-shimmer {
+  animation: hexShimmer 1.8s ease-in-out infinite;
+}
+
+.animate-flare-streak {
+  animation: flareStreak 1.1s linear infinite;
+}
+
+.animate-greenhouse-particle {
+  animation: greenhouseParticle 3.2s ease-in-out infinite;
+}
+
+.animate-solar-dust {
+  animation: solarDustSweep 1.8s linear infinite;
+}
+
+.animate-outpost-shake {
+  animation: outpostShake 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
+.animate-float-delta {
+  animation: floatDeltaFade 2.6s ease-out forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse-glow,
+  .animate-hex-shimmer,
+  .animate-flare-streak,
+  .animate-greenhouse-particle,
+  .animate-solar-dust,
+  .animate-outpost-shake,
+  .animate-float-delta {
+    animation: none;
+  }
+}
