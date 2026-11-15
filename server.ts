@@ -13,6 +13,48 @@ const TTS_MODEL_NAME = 'gemini-3.8-flash-lite-tts';
 
 const VALID_VOICES = new Set(['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr']);
 const ttsCache = new Map<string, string>();
+let ttsCooldownUntil = 0;
+let capcomCooldownUntil = 0;
+
+function extractErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === 'string') return err;
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
+  }
+}
+
+function isQuotaOrRateLimitError(err: unknown): boolean {
+  const msg = extractErrorMessage(err);
+  return (
+    msg.includes('"code":429') ||
+    msg.includes('RESOURCE_EXHAUSTED') ||
+    /quota|rate[- ]?limit/i.test(msg)
+  );
+}
+
+function extractRetryDelayMs(err: unknown, defaultMs = 15 * 60 * 1000): number {
+  const msg = extractErrorMessage(err);
+  const jsonDelayMatch = msg.match(/"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/i);
+  if (jsonDelayMatch) {
+    const secs = Number(jsonDelayMatch[1]);
+    if (Number.isFinite(secs) && secs > 0) {
+      return Math.min(60 * 60 * 1000, Math.max(60 * 1000, Math.ceil(secs * 1000)));
+    }
+  }
+  const humanDelayMatch = msg.match(/retry in\s+(?:(\d+)m)?(\d+(?:\.\d+)?)s/i);
+  if (humanDelayMatch) {
+    const mins = Number(humanDelayMatch[1] || 0);
+    const secs = Number(humanDelayMatch[2] || 0);
+    const totalMs = (mins * 60 + secs) * 1000;
+    if (Number.isFinite(totalMs) && totalMs > 0) {
+      return Math.min(60 * 60 * 1000, Math.max(60 * 1000, Math.ceil(totalMs)));
+    }
+  }
+  return defaultMs;
+}
 
 function getGeminiClient(apiVersion = 'v1beta'): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -33,9 +75,19 @@ async function startServer() {
   app.use(express.json());
 
   app.post('/api/tts', async (req: Request, res: Response) => {
+    const now = Date.now();
+    if (now < ttsCooldownUntil) {
+      res.json({
+        audioBase64: null,
+        fallback: true,
+        retryAfterMs: ttsCooldownUntil - now
+      });
+      return;
+    }
+
     const ai = getGeminiClient('v1beta');
     if (!ai) {
-      res.status(503).json({ error: 'Voice service key unavailable' });
+      res.json({ audioBase64: null, fallback: true, retryAfterMs: 10 * 60 * 1000 });
       return;
     }
 
@@ -88,7 +140,7 @@ async function startServer() {
 
       const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
       if (!base64Audio) {
-        res.status(502).json({ error: 'Empty audio response from TTS' });
+        res.json({ audioBase64: null, fallback: true, retryAfterMs: 60 * 1000 });
         return;
       }
 
@@ -100,16 +152,30 @@ async function startServer() {
 
       res.json({ audioBase64: base64Audio, mimeType: 'audio/wav' });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error('TTS generation error:', err);
-      res.status(500).json({ error: 'Failed to synthesize voice', detail: msg });
+      const retryAfterMs = isQuotaOrRateLimitError(err)
+        ? extractRetryDelayMs(err)
+        : 10 * 60 * 1000;
+      if (Date.now() >= ttsCooldownUntil) {
+        console.warn(
+          `TTS switched to Web Speech fallback for ${Math.round(retryAfterMs / 1000)}s:`,
+          isQuotaOrRateLimitError(err) ? 'quota/rate limit reached' : extractErrorMessage(err)
+        );
+      }
+      ttsCooldownUntil = Date.now() + retryAfterMs;
+      res.json({ audioBase64: null, fallback: true, retryAfterMs });
     }
   });
 
   app.post('/api/capcom/debrief', async (req: Request, res: Response) => {
+    const now = Date.now();
+    if (now < capcomCooldownUntil) {
+      res.json({ text: null, fallback: true, retryAfterMs: capcomCooldownUntil - now });
+      return;
+    }
+
     const ai = getGeminiClient();
     if (!ai) {
-      res.status(503).json({ error: 'Flight radio key unavailable' });
+      res.json({ text: null, fallback: true, retryAfterMs: 10 * 60 * 1000 });
       return;
     }
 
@@ -148,22 +214,36 @@ Systems: Water/O2 ${waterO2Pct}%, Crops ${cropsPct}%, Temp ${cabinTempC}°C, CO2
 
       const text = response.text?.trim();
       if (!text) {
-        res.status(502).json({ error: 'Empty radio response' });
+        res.json({ text: null, fallback: true, retryAfterMs: 60 * 1000 });
         return;
       }
 
       res.json({ text });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error('CAPCOM debrief error:', err);
-      res.status(500).json({ error: 'Failed to generate debrief', detail: msg });
+      const retryAfterMs = isQuotaOrRateLimitError(err)
+        ? extractRetryDelayMs(err)
+        : 10 * 60 * 1000;
+      if (Date.now() >= capcomCooldownUntil) {
+        console.warn(
+          `CAPCOM radio switched to local fallback for ${Math.round(retryAfterMs / 1000)}s:`,
+          isQuotaOrRateLimitError(err) ? 'quota/rate limit reached' : extractErrorMessage(err)
+        );
+      }
+      capcomCooldownUntil = Date.now() + retryAfterMs;
+      res.json({ text: null, fallback: true, retryAfterMs });
     }
   });
 
   app.post('/api/capcom/hint', async (req: Request, res: Response) => {
+    const now = Date.now();
+    if (now < capcomCooldownUntil) {
+      res.json({ text: null, fallback: true, retryAfterMs: capcomCooldownUntil - now });
+      return;
+    }
+
     const ai = getGeminiClient();
     if (!ai) {
-      res.status(503).json({ error: 'Flight radio key unavailable' });
+      res.json({ text: null, fallback: true, retryAfterMs: 10 * 60 * 1000 });
       return;
     }
 
@@ -193,22 +273,36 @@ Sliders: Electrolysis ${currentSliders?.electrolysisKw}⚡ (req ${requiredLifeSu
 
       const text = response.text?.trim();
       if (!text) {
-        res.status(502).json({ error: 'Empty radio response' });
+        res.json({ text: null, fallback: true, retryAfterMs: 60 * 1000 });
         return;
       }
 
       res.json({ text });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error('CAPCOM hint error:', err);
-      res.status(500).json({ error: 'Failed to generate hint', detail: msg });
+      const retryAfterMs = isQuotaOrRateLimitError(err)
+        ? extractRetryDelayMs(err)
+        : 10 * 60 * 1000;
+      if (Date.now() >= capcomCooldownUntil) {
+        console.warn(
+          `CAPCOM radio switched to local fallback for ${Math.round(retryAfterMs / 1000)}s:`,
+          isQuotaOrRateLimitError(err) ? 'quota/rate limit reached' : extractErrorMessage(err)
+        );
+      }
+      capcomCooldownUntil = Date.now() + retryAfterMs;
+      res.json({ text: null, fallback: true, retryAfterMs });
     }
   });
 
   app.post('/api/capcom/victory', async (req: Request, res: Response) => {
+    const now = Date.now();
+    if (now < capcomCooldownUntil) {
+      res.json({ text: null, fallback: true, retryAfterMs: capcomCooldownUntil - now });
+      return;
+    }
+
     const ai = getGeminiClient();
     if (!ai) {
-      res.status(503).json({ error: 'Flight radio key unavailable' });
+      res.json({ text: null, fallback: true, retryAfterMs: 10 * 60 * 1000 });
       return;
     }
 
@@ -231,15 +325,23 @@ Sliders: Electrolysis ${currentSliders?.electrolysisKw}⚡ (req ${requiredLifeSu
 
       const text = response.text?.trim();
       if (!text) {
-        res.status(502).json({ error: 'Empty radio response' });
+        res.json({ text: null, fallback: true, retryAfterMs: 60 * 1000 });
         return;
       }
 
       res.json({ text });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error('CAPCOM victory error:', err);
-      res.status(500).json({ error: 'Failed to generate victory note', detail: msg });
+      const retryAfterMs = isQuotaOrRateLimitError(err)
+        ? extractRetryDelayMs(err)
+        : 10 * 60 * 1000;
+      if (Date.now() >= capcomCooldownUntil) {
+        console.warn(
+          `CAPCOM radio switched to local fallback for ${Math.round(retryAfterMs / 1000)}s:`,
+          isQuotaOrRateLimitError(err) ? 'quota/rate limit reached' : extractErrorMessage(err)
+        );
+      }
+      capcomCooldownUntil = Date.now() + retryAfterMs;
+      res.json({ text: null, fallback: true, retryAfterMs });
     }
   });
 

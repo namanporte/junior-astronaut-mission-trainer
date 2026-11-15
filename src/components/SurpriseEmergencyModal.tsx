@@ -135,7 +135,7 @@ export function SurpriseEmergencyModal({
             onClick={onDismissForNow}
             className="text-xs font-bold text-slate-500 hover:text-slate-800 underline cursor-pointer"
           >
-            Walk to {station?.shortName ?? 'station'} first before choosing
+            Step back from {station?.shortName ?? 'panel'} for now
           </button>
         </div>
       </div>

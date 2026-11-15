@@ -46,6 +46,7 @@ class RadioVoiceEngine {
   private activeNoiseSource: AudioBufferSourceNode | null = null;
   private activeEndCallback: (() => void) | null = null;
   private playToken = 0;
+  private ttsCooldownUntil = 0;
 
   private ensureAudioContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
@@ -173,6 +174,10 @@ class RadioVoiceEngine {
     const cached = this.clientCache.get(cacheKey);
     if (cached) return cached;
 
+    if (Date.now() < this.ttsCooldownUntil) {
+      return null;
+    }
+
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 5500);
     try {
@@ -186,10 +191,24 @@ class RadioVoiceEngine {
         }),
         signal: controller.signal
       });
-      if (!resp.ok) return null;
+      if (!resp.ok) {
+        this.ttsCooldownUntil = Date.now() + 5 * 60 * 1000;
+        return null;
+      }
 
-      const data = (await resp.json()) as { audioBase64?: string };
-      if (!data.audioBase64) return null;
+      const data = (await resp.json()) as {
+        audioBase64?: string | null;
+        fallback?: boolean;
+        retryAfterMs?: number;
+      };
+      if (data.fallback || !data.audioBase64) {
+        const retryMs =
+          typeof data.retryAfterMs === 'number' && data.retryAfterMs > 0
+            ? data.retryAfterMs
+            : 10 * 60 * 1000;
+        this.ttsCooldownUntil = Date.now() + retryMs;
+        return null;
+      }
 
       const bin = window.atob(data.audioBase64);
       const bytes = new Uint8Array(bin.length);

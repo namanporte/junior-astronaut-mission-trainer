@@ -31,11 +31,16 @@ export interface CapcomResponse {
 }
 
 const CAPCOM_TIMEOUT_MS = 4500;
+let capcomCooldownUntil = 0;
 
 async function postCapcomEndpoint(
   url: string,
   payload: Record<string, unknown>
 ): Promise<string | null> {
+  if (Date.now() < capcomCooldownUntil) {
+    return null;
+  }
+
   const controller = new AbortController();
   const timeoutId = window.setTimeout(() => controller.abort(), CAPCOM_TIMEOUT_MS);
 
@@ -47,8 +52,23 @@ async function postCapcomEndpoint(
       signal: controller.signal
     });
 
-    if (!response.ok) return null;
-    const data = (await response.json()) as { text?: unknown };
+    if (!response.ok) {
+      capcomCooldownUntil = Date.now() + 5 * 60 * 1000;
+      return null;
+    }
+    const data = (await response.json()) as {
+      text?: unknown;
+      fallback?: boolean;
+      retryAfterMs?: number;
+    };
+    if (data.fallback) {
+      const retryMs =
+        typeof data.retryAfterMs === 'number' && data.retryAfterMs > 0
+          ? data.retryAfterMs
+          : 10 * 60 * 1000;
+      capcomCooldownUntil = Date.now() + retryMs;
+      return null;
+    }
     if (typeof data.text === 'string' && data.text.trim().length > 0) {
       return data.text.trim();
     }

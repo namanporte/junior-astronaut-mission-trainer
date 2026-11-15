@@ -103,6 +103,8 @@ export function App() {
   const [surpriseDeck, setSurpriseDeck] = useState<SurpriseEmergency[]>([]);
   const [firedSurpriseIds, setFiredSurpriseIds] = useState<string[]>([]);
   const [activeEmergency, setActiveEmergency] = useState<SurpriseEmergency | null>(null);
+  const activeEmergencyRef = useRef<SurpriseEmergency | null>(null);
+  activeEmergencyRef.current = activeEmergency;
   const [activeAction, setActiveAction] = useState<ActiveActionSequence | null>(null);
   const [actionStage, setActionStage] = useState<'WALKING' | 'WORKING'>('WALKING');
   const actionNonceRef = useRef(0);
@@ -411,24 +413,21 @@ export function App() {
 
       setShiftSecondsLeft((prevLeft) => {
         const nextLeft = prevLeft - 1;
-        if (nextLeft === 28 && surpriseDeck[0] && !firedSurpriseIds.includes(surpriseDeck[0].id)) {
-          const em = surpriseDeck[0];
-          setFiredSurpriseIds((f) => [...f, em.id]);
-          setActiveEmergency(em);
-          setPhase('SURPRISE_DECISION');
-          soundEngine.playCrisisBeep(3);
-          haptics.alert();
-        } else if (
-          nextLeft === 14 &&
+        if (
+          nextLeft <= 18 &&
+          !activeEmergencyRef.current &&
           surpriseDeck[1] &&
           !firedSurpriseIds.includes(surpriseDeck[1].id)
         ) {
           const em = surpriseDeck[1];
+          const stName =
+            BASE_STATIONS.find((s) => s.id === em.stationId)?.shortName ?? 'Station';
           setFiredSurpriseIds((f) => [...f, em.id]);
           setActiveEmergency(em);
-          setPhase('SURPRISE_DECISION');
-          soundEngine.playCrisisBeep(2);
-          haptics.alert();
+          soundEngine.playCrisisBeep(1);
+          showToast(
+            `Panel Mission @ ${stName}: Move near the glowing panel & interact (E / click)!`
+          );
         } else if (nextLeft <= 0) {
           setPhase('STORM_SIM');
           return 0;
@@ -448,7 +447,8 @@ export function App() {
     power,
     surpriseDeck,
     firedSurpriseIds,
-    checkFatalThresholds
+    checkFatalThresholds,
+    showToast
   ]);
 
   // Earth radio light-speed delay ticker
@@ -460,23 +460,33 @@ export function App() {
     return () => window.clearTimeout(t);
   }, [commsDelaySeconds]);
 
-  // Press 'E' near a station to handle active emergency or inspect
+  const handleSelectStationIn3D = useCallback(
+    (stationId: StationId) => {
+      if (activeEmergency && activeEmergency.stationId === stationId) {
+        setPhase('SURPRISE_DECISION');
+        return;
+      }
+      const st = BASE_STATIONS.find((s) => s.id === stationId);
+      if (st) {
+        setShowInterface(true);
+        showToast(`${st.name}: ${st.role}`);
+      }
+    },
+    [activeEmergency, showToast]
+  );
+
+  // Press 'E' only when standing near a station panel to interact with it
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       if (phase !== 'ACTIVE_SHIFT') return;
-      if (e.key === 'e' || e.key === 'E') {
-        if (activeEmergency && nearestStation === activeEmergency.stationId) {
-          setPhase('SURPRISE_DECISION');
-        } else if (nearestStation) {
-          const st = BASE_STATIONS.find((s) => s.id === nearestStation);
-          setShowInterface(true);
-          if (st) showToast(`Inspecting ${st.name}: Repair controls opened below!`);
-        }
+      if ((e.key === 'e' || e.key === 'E') && nearestStation) {
+        handleSelectStationIn3D(nearestStation);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [phase, activeEmergency, nearestStation, showToast]);
+  }, [phase, nearestStation, handleSelectStationIn3D]);
 
   const handleStartMission = (skipStory = false) => {
     soundEngine.unlock();
@@ -551,10 +561,19 @@ export function App() {
 
     const deck = pickSurpriseDeckForSol(sol, world);
     setSurpriseDeck(deck);
-    setFiredSurpriseIds([]);
-    setActiveEmergency(null);
+    const firstEmergency = deck[0] ?? null;
+    setFiredSurpriseIds(firstEmergency ? [firstEmergency.id] : []);
+    setActiveEmergency(firstEmergency);
     setShiftSecondsLeft(SHIFT_DURATION_SECONDS);
-    showToast(result.bannerText);
+    if (firstEmergency) {
+      const stName =
+        BASE_STATIONS.find((s) => s.id === firstEmergency.stationId)?.shortName ?? 'Station';
+      showToast(
+        `${result.bannerText} · Mission beacon lit at ${stName}—walk there to interact!`
+      );
+    } else {
+      showToast(result.bannerText);
+    }
 
     const anim = resolveOptionActionAnim(opt.id);
     soundEngine.playSolSurvivedChime();
@@ -862,21 +881,6 @@ export function App() {
     setPhase('MORNING_DILEMMA');
   };
 
-  const handleSelectStationIn3D = useCallback(
-    (stationId: StationId) => {
-      if (activeEmergency && activeEmergency.stationId === stationId) {
-        setPhase('SURPRISE_DECISION');
-        return;
-      }
-      const st = BASE_STATIONS.find((s) => s.id === stationId);
-      if (st) {
-        setShowInterface(true);
-        showToast(`${st.name}: ${st.role}`);
-      }
-    },
-    [activeEmergency, showToast]
-  );
-
   const highCo2 = systems.co2Ppm >= 1800;
   const overheating = systems.cabinTempC >= 36;
   const freezing = systems.cabinTempC <= 12;
@@ -1062,7 +1066,9 @@ export function App() {
                 soundEngine.playSliderTick(35);
               }}
               onOpenEmergencyModal={() => {
-                if (activeEmergency) setPhase('SURPRISE_DECISION');
+                if (activeEmergency && nearestStation === activeEmergency.stationId) {
+                  setPhase('SURPRISE_DECISION');
+                }
               }}
               onStationRepair={handleStationRepair}
               onUpdatePower={handleUpdatePower}

@@ -1965,11 +1965,6 @@ export function Outpost3DViewport({
         e.preventDefault();
         triggerJump();
       }
-      if (e.code === 'KeyE' && phaseRef.current === 'ACTIVE_SHIFT') {
-        if (lastNearestSent) {
-          callbacksRef.current.onSelectStation(lastNearestSent);
-        }
-      }
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {

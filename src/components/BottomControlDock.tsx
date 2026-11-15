@@ -171,16 +171,14 @@ export function BottomControlDock({
   if (!isOpen) {
     return (
       <div className="pointer-events-auto mx-auto flex flex-wrap items-center justify-center gap-2">
-        {activeEmergency && (
+        {emergencyHandsOnReady && activeEmergency && (
           <button
             type="button"
             onClick={onOpenEmergencyModal}
             className="btn-tactile px-3.5 py-2 rounded-2xl bg-rose-600 hover:bg-rose-500 border border-rose-400 text-white text-xs font-extrabold shadow-xl flex items-center gap-1.5 cursor-pointer"
           >
             <AlertTriangle className="w-4 h-4 animate-bounce" />
-            <span>
-              {emergencyHandsOnReady ? 'Solve On-Site (Bonus!)' : 'Solve Emergency!'}
-            </span>
+            <span>Interact: {activeEmergency.title}</span>
           </button>
         )}
 
@@ -224,16 +222,14 @@ export function BottomControlDock({
         </div>
 
         <div className="flex items-center gap-2">
-          {activeEmergency && (
+          {emergencyHandsOnReady && activeEmergency && (
             <button
               type="button"
               onClick={onOpenEmergencyModal}
               className="btn-tactile px-2.5 py-1 rounded-xl bg-rose-600 hover:bg-rose-500 border border-rose-400 text-white text-xs font-extrabold flex items-center gap-1.5 cursor-pointer"
             >
               <AlertTriangle className="w-3.5 h-3.5" />
-              <span>
-                {emergencyHandsOnReady ? 'Solve On-Site (Bonus!)' : 'Solve Emergency!'}
-              </span>
+              <span>Interact: {activeEmergency.title}</span>
             </button>
           )}
 
