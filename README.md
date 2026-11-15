@@ -85,4 +85,44 @@ npm start
 │   ├── services/                      # NASA DONKI & flight comms services
 │   ├── types/game.ts                  # TypeScript types & game interfaces
 │   └── utils/                         # Physics simulation, music, SFX, radio & haptics
+
+
+
+# 🚀 AstroJun
+
+> **Command a 3D Moon or Mars Outpost · Survive 7 Sols of Real Space Physics**
+
+AstroJun is an interactive 3D planetary survival simulation built with **Three.js**, **React**, and **Web Audio**. Players explore rough, cratered worlds with hover-boot physics, balance a strict kilowatt power grid across life-support systems, repair equipment on-site, and shield the colony against incoming solar storms.
+
+---
+
+## 🌌 Core 7-Sol Gameplay Loop
+
+```mermaid
+flowchart LR
+    A[🌠 3D Cosmic Launch] --> B[🛸 Story Intro]
+    B --> C[⚠️ Morning Dilemma]
+    C --> D[🧑‍🚀 Walk & Fix Animation]
+    D --> E[⚡ 38s Active Shift]
+    E -->|Mid-Shift Crisis| F[🚨 Surprise Emergency]
+    F --> D
+    E -->|Timer Ends / Brace| G[☀️ Solar Storm Clash]
+    G --> H[📊 Sol Debrief]
+    H -->|Sol < 7| C
+    H -->|Sol 7 Survived| I[🏆 AstroJun Victory]
+    E -->|Critical Failure| J[💥 Mission Over]
 ```
+
+flowchart TB
+    SOLAR["☀️ Solar Power Yard<br/>Generates Grid Budget (kW)"] --> BUS{"⚡ Shared Power Bus"}
+    BUS --> AIR["💧 Air & Water Bay<br/>Electrolysis (O₂) + CO₂ Scrubbers"]
+    BUS --> BIO["🌱 Bio-Dome Greenhouse<br/>Grow Lights + Thermal Heat"]
+    BUS --> CMD["🛰️ Command Bridge<br/>Forcefield Spire + Earth Radio"]
+    LAB["🔧 Thermal & 3D Print Lab<br/>Radiators + Spare Valves"] -.->|Prevents Overheat| AIR
+    LAB -.->|Supplies Parts| BIO
+
+    pie showData
+    title Balanced Storm-Ready Power Split (100 kW)
+    "💧 Water & O2 Electrolysis" : 35
+    "🌱 Hydroponics & Heating" : 30
+    "🛡️ Forcefield Shielding" : 35
