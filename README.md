@@ -7,12 +7,13 @@
 
 ## 1. Project Title & Problem Statement
 
-**Project Title:** **AstroJun — 3D Planetary Outpost & Space Physics Simulator**
+- **Project Title:** **AstroJun**
+- **Official Challenge / Problem Statement:** **Build a Junior Astronaut Mission Trainer**
 
-### Problem Statement
-Understanding how astronauts survive off-world involves complex, tightly coupled science concepts—limited solar kilowatt budgets, water-to-oxygen electrolysis, closed-loop hydroponics, cabin thermal dissipation in a vacuum, $\text{CO}_2$ scrubber saturation, toxic Martian perchlorates, and sudden solar radiation storms. Traditional textbooks and static quizzes make these cause-and-effect trade-offs abstract and hard for young learners (ages 7–12+) to grasp intuitively.
+### Problem Summary
+Off-world astronaut survival depends on tightly coupled physics and habitat engineering—limited solar kilowatt budgets, water-to-oxygen electrolysis, closed-loop hydroponics, cabin heat dissipation in vacuum, $\text{CO}_2$ scrubber limits, toxic Martian perchlorates, and sudden solar radiation storms. Textbooks and static quizzes fail to give young learners an intuitive, hands-on understanding of how these systems work together under pressure.
 
-**AstroJun** bridges that gap by turning space-habitat engineering into an interactive 3D world where every kilowatt allocation, station repair, and emergency decision has immediate visual, physical, and survival consequences across 7 Sols on the Moon (`0.16g`) and Mars (`0.38g`).
+To address **Build a Junior Astronaut Mission Trainer**, **AstroJun** turns space-habitat engineering into an interactive 3D mission trainer where junior astronauts manage real-time power allocation, physically walk across rough Moon (`0.16g`) and Mars (`0.38g`) terrain to repair outpost stations, handle mid-shift emergencies, and defend against solar storms across 7 Sols.
 
 ---
 
