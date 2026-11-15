@@ -14,14 +14,16 @@ const TTS_MODEL_NAME = 'gemini-3.8-flash-lite-tts';
 const VALID_VOICES = new Set(['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr']);
 const ttsCache = new Map<string, string>();
 
-function getGeminiClient(): GoogleGenAI | null {
+function getGeminiClient(apiVersion = 'v1beta'): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
     return null;
   }
   return new GoogleGenAI({
     apiKey,
+    apiVersion,
     httpOptions: {
+      apiVersion,
       headers: {
         'User-Agent': 'aistudio-build'
       }
@@ -34,7 +36,7 @@ async function startServer() {
   app.use(express.json());
 
   app.post('/api/tts', async (req: Request, res: Response) => {
-    const ai = getGeminiClient();
+    const ai = getGeminiClient('v1beta');
     if (!ai) {
       res.status(503).json({ error: 'Gemini API key unavailable' });
       return;
@@ -101,8 +103,9 @@ async function startServer() {
 
       res.json({ audioBase64: base64Audio, mimeType: 'audio/wav' });
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
       console.error('TTS generation error:', err);
-      res.status(500).json({ error: 'Failed to synthesize voice' });
+      res.status(500).json({ error: 'Failed to synthesize voice', detail: msg });
     }
   });
 
@@ -154,8 +157,9 @@ Systems: Water/O2 ${waterO2Pct}%, Crops ${cropsPct}%, Temp ${cabinTempC}°C, CO2
 
       res.json({ text });
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
       console.error('CAPCOM debrief error:', err);
-      res.status(500).json({ error: 'Failed to generate debrief' });
+      res.status(500).json({ error: 'Failed to generate debrief', detail: msg });
     }
   });
 
@@ -198,8 +202,9 @@ Sliders: Electrolysis ${currentSliders?.electrolysisKw}⚡ (req ${requiredLifeSu
 
       res.json({ text });
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
       console.error('CAPCOM hint error:', err);
-      res.status(500).json({ error: 'Failed to generate hint' });
+      res.status(500).json({ error: 'Failed to generate hint', detail: msg });
     }
   });
 
@@ -235,8 +240,9 @@ Sliders: Electrolysis ${currentSliders?.electrolysisKw}⚡ (req ${requiredLifeSu
 
       res.json({ text });
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
       console.error('CAPCOM victory error:', err);
-      res.status(500).json({ error: 'Failed to generate victory note' });
+      res.status(500).json({ error: 'Failed to generate victory note', detail: msg });
     }
   });
 

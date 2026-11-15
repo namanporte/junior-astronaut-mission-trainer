@@ -266,12 +266,12 @@ export function DecisionActionOverlay({
 
   return (
     <div
-      className="pointer-events-none fixed inset-x-0 top-16 sm:top-20 z-30 flex justify-center px-3 sm:px-4"
+      className="pointer-events-none fixed inset-x-0 bottom-3 z-30 flex justify-center px-3 sm:px-4"
       role="status"
       aria-live="polite"
     >
       <div
-        className={`pointer-events-auto animate-modal-pop w-full max-w-lg rounded-2xl bg-slate-950/94 border-2 shadow-2xl p-3 sm:p-3.5 text-slate-100 ${
+        className={`pointer-events-auto animate-modal-pop w-full max-w-md rounded-2xl bg-slate-950/92 border shadow-2xl px-3.5 py-2.5 text-slate-100 ${
           action.tone === 'rose' || action.animKind === 'SHORTCUT_WARN'
             ? 'border-amber-400/80'
             : action.blocking
@@ -279,15 +279,18 @@ export function DecisionActionOverlay({
             : 'border-cyan-400/75'
         }`}
       >
-        {/* Header Row */}
         <div className="flex items-center justify-between gap-2 mb-1.5">
           <div className="flex items-center gap-2 min-w-0">
-            <span className="text-[10px] font-mono-tabular font-extrabold uppercase tracking-wider text-sky-300 shrink-0">
-              {action.blocking ? 'CREW DISPATCH' : 'ON-SITE ACTION'}
+            <span
+              className={`text-[10px] font-mono-tabular font-extrabold uppercase tracking-wider shrink-0 ${
+                isWalking ? 'text-sky-300' : 'text-emerald-300'
+              }`}
+            >
+              {isWalking ? '1/2 WALKING TO SITE' : '2/2 FIXING ON-SITE'}
             </span>
             {stationMeta && (
-              <span className="text-[10px] font-mono-tabular font-bold text-slate-300 truncate">
-                • {stationMeta.shortName}
+              <span className="text-[10px] font-mono-tabular font-bold text-slate-400 truncate">
+                · {stationMeta.shortName}
               </span>
             )}
           </div>
@@ -296,46 +299,17 @@ export function DecisionActionOverlay({
             <button
               type="button"
               onClick={onContinue}
-              className="btn-tactile shrink-0 px-2.5 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 text-[11px] font-extrabold cursor-pointer"
+              className="btn-tactile shrink-0 px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 text-[10px] font-extrabold cursor-pointer"
             >
               Skip
             </button>
           )}
         </div>
 
-        {/* Title */}
-        <div className="font-display font-extrabold text-sm sm:text-base text-white mb-2 truncate">
-          {action.title}
-        </div>
-
-        {/* 2-Step Segmented Progress Indicator */}
-        <div className="grid grid-cols-2 gap-1.5 mb-2 text-[11px] font-mono-tabular font-extrabold">
-          <div
-            className={`px-2.5 py-1 rounded-lg border flex items-center justify-between ${
-              isWalking
-                ? 'bg-sky-500/20 border-sky-400 text-sky-200'
-                : 'bg-emerald-500/15 border-emerald-500/50 text-emerald-300'
-            }`}
-          >
-            <span>1. Walk to Site</span>
-            <span>{isWalking ? 'NOW' : 'DONE'}</span>
-          </div>
-          <div
-            className={`px-2.5 py-1 rounded-lg border flex items-center justify-between ${
-              !isWalking
-                ? 'bg-emerald-500/20 border-emerald-400 text-emerald-200'
-                : 'bg-slate-900 border-slate-700 text-slate-400'
-            }`}
-          >
-            <span>2. Character Fix</span>
-            <span>{!isWalking ? 'NOW' : 'NEXT'}</span>
-          </div>
-        </div>
-
         <ActionKineticStage animKind={action.animKind} stage={stage} />
 
-        {/* 2-Stage Progress Bar */}
-        <div className="mt-2 h-1.5 w-full rounded-full bg-slate-800 overflow-hidden">
+        {/* Slim Progress Bar */}
+        <div className="mt-1.5 h-1 w-full rounded-full bg-slate-800 overflow-hidden">
           {isWalking ? (
             <div className="h-full w-2/5 rounded-full bg-sky-400 animate-pulse transition-all duration-300" />
           ) : (
@@ -350,8 +324,10 @@ export function DecisionActionOverlay({
           )}
         </div>
 
-        <p className="mt-1.5 text-[11px] font-bold text-slate-200 leading-snug">
-          {isWalking ? `Heading to ${stationMeta?.name ?? 'target station'}...` : action.resultBanner}
+        <p className="mt-1 text-[11px] font-bold text-slate-200 truncate">
+          {isWalking
+            ? `${action.title} — Walking to ${stationMeta?.shortName ?? 'station'}...`
+            : `${action.title} — ${action.resultBanner}`}
         </p>
       </div>
     </div>

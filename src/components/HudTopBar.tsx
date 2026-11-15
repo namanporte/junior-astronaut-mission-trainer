@@ -3,6 +3,7 @@ import {
   Droplets,
   FlaskConical,
   HelpCircle,
+  Music,
   RotateCcw,
   Shield,
   Sprout,
@@ -39,9 +40,11 @@ interface HudTopBarProps {
   systems: BaseSystemsState;
   upcomingFlare: SolarFlareEvent | null;
   muted: boolean;
+  musicEnabled: boolean;
   onOpenForecast: () => void;
   onOpenHelp: () => void;
   onToggleMute: () => void;
+  onToggleMusic: () => void;
   onRestart: () => void;
 }
 
@@ -58,9 +61,11 @@ export function HudTopBar({
   systems,
   upcomingFlare,
   muted,
+  musicEnabled,
   onOpenForecast,
   onOpenHelp,
   onToggleMute,
+  onToggleMusic,
   onRestart
 }: HudTopBarProps) {
   const allocated = getTotalAllocatedPower(power);
@@ -213,6 +218,20 @@ export function HudTopBar({
             className="btn-tactile w-8 h-8 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 flex items-center justify-center cursor-pointer"
           >
             <HelpCircle className="w-4 h-4" />
+          </button>
+
+          <button
+            type="button"
+            onClick={onToggleMusic}
+            aria-label={musicEnabled ? 'Turn Music Off' : 'Turn Music On'}
+            title={musicEnabled ? 'Music: On' : 'Music: Off'}
+            className={`btn-tactile w-8 h-8 rounded-xl border flex items-center justify-center cursor-pointer ${
+              musicEnabled && !muted
+                ? 'bg-sky-500/20 hover:bg-sky-500/30 border-sky-400/60 text-sky-200'
+                : 'bg-slate-800 hover:bg-slate-700 border-slate-600 text-slate-400'
+            }`}
+          >
+            <Music className="w-4 h-4" />
           </button>
 
           <button

@@ -40,28 +40,187 @@ interface Outpost3DViewportProps {
 // Module-scope reusable math helpers (zero per-frame GC churn)
 const _vec3A = new THREE.Vector3();
 const _vec3B = new THREE.Vector3();
+const _vec3Up = new THREE.Vector3(0, 1, 0);
+const _quatA = new THREE.Quaternion();
+const _quatYaw = new THREE.Quaternion();
 const _raycaster = new THREE.Raycaster();
 const _pointerNdc = new THREE.Vector2();
 const _groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 const _hitPoint = new THREE.Vector3();
 const _dummy = new THREE.Object3D();
 
+interface CraterDef {
+  cx: number;
+  cz: number;
+  r: number;
+  depth: number;
+}
+
+const TERRAIN_CRATERS: CraterDef[] = [
+  { cx: 5.8, cz: -14.2, r: 4.8, depth: 1.7 },
+  { cx: -6.4, cz: -14.6, r: 4.5, depth: 1.55 },
+  { cx: -18.5, cz: 0.4, r: 5.4, depth: 1.9 },
+  { cx: 18.2, cz: 0.3, r: 5.1, depth: 1.75 },
+  { cx: 0.4, cz: 15.8, r: 5.6, depth: 1.95 },
+  { cx: -5.4, cz: 4.8, r: 3.4, depth: 1.05 },
+  { cx: -24.0, cz: -18.5, r: 8.2, depth: 2.5 },
+  { cx: 24.5, cz: 17.5, r: 8.6, depth: 2.6 },
+  { cx: -26.5, cz: 21.0, r: 7.5, depth: 2.25 },
+  { cx: 23.0, cz: -21.5, r: 7.4, depth: 2.15 }
+];
+
 /**
- * Deterministic terrain elevation: flat graded landing pad inside r < 22m,
- * realistic undulating cratered hills and ridges outside the outpost.
+ * Unflattened planetary geology: multi-octave hills, sharp ridged outcrops,
+ * rough rocky micro-undulations, crater bowls with raised rims, and outer basin cliffs.
+ */
+function rawTerrainHeight(x: number, z: number, world: WorldBody): number {
+  const r = Math.hypot(x, z);
+  const amp = world === 'MOON' ? 1.48 : 1.32;
+
+  // Rolling basin hills & valleys across the entire outpost
+  const hills =
+    Math.sin(x * 0.115 + 0.4) * Math.cos(z * 0.108 - 0.3) * 1.42 +
+    Math.cos(x * 0.068 - z * 0.078 + 0.5) * 1.08;
+
+  // Ridged craggy crests
+  const r1 = 1 - Math.abs(Math.sin(x * 0.155 + z * 0.115));
+  const r2 = 1 - Math.abs(Math.cos(x * 0.23 - z * 0.185 + 0.9));
+  const ridges = (r1 * r1 * 1.3 + r2 * r2 * 0.72 - 0.82) * 0.95;
+
+  // Rough rocky bumps & high-low uneven regolith
+  const roughBumps =
+    Math.sin(x * 0.46 + 1.1) * Math.cos(z * 0.51 - 0.6) * 0.34 +
+    Math.sin(x * 0.88 - z * 0.82 + 0.4) * 0.17;
+
+  // Impact crater bowls + raised ejecta rims
+  let craterOffset = 0;
+  for (let i = 0; i < TERRAIN_CRATERS.length; i++) {
+    const c = TERRAIN_CRATERS[i];
+    const d = Math.hypot(x - c.cx, z - c.cz) / c.r;
+    if (d < 1.55) {
+      if (d < 1.0) {
+        craterOffset -= c.depth * (1 - d * d);
+      }
+      const rim = Math.exp(-Math.pow((d - 1.02) / 0.19, 2));
+      craterOffset += c.depth * 0.42 * rim;
+    }
+  }
+
+  // Dramatic surrounding crater rim & canyon walls
+  const outerRim =
+    THREE.MathUtils.smoothstep(r, 24.5, 42) * 2.2 +
+    THREE.MathUtils.smoothstep(r, 42, 80) * 8.4;
+
+  return amp * (hills + ridges * 0.85) + roughBumps + craterOffset + outerRim;
+}
+
+/**
+ * Deterministic terrain elevation: preserves full rough high-and-low hills,
+ * craters, and ridges across the yard while smoothly grading compact pads
+ * directly beneath each of the 5 outpost modules.
  */
 function sampleTerrainHeight(x: number, z: number, world: WorldBody): number {
-  const r = Math.hypot(x, z);
-  if (r <= 21.5) return 0;
-  const blend = THREE.MathUtils.smoothstep(r, 21.5, 34);
-  const amp = world === 'MOON' ? 1.85 : 1.55;
-  const ridge =
-    Math.sin(x * 0.085) * Math.cos(z * 0.085) * 1.6 +
-    Math.sin(x * 0.21 + 1.4) * Math.sin(z * 0.19 - 0.7) * 0.65 +
-    Math.cos((x + z) * 0.12) * 0.55;
-  const crater = Math.max(0, Math.sin(r * 0.16) * 0.9);
-  const rimLift = THREE.MathUtils.smoothstep(r, 48, 82) * 6.5;
-  return blend * (amp * (0.45 + ridge * 0.5 + crater) + rimLift);
+  let h = rawTerrainHeight(x, z, world);
+  for (let i = 0; i < BASE_STATIONS.length; i++) {
+    const st = BASE_STATIONS[i];
+    const sx = st.position[0];
+    const sz = st.position[2];
+    const d = Math.hypot(x - sx, z - sz);
+    if (d < 5.4) {
+      const padBase = rawTerrainHeight(sx, sz, world);
+      const t = 1 - THREE.MathUtils.smoothstep(d, 3.25, 5.4);
+      h = THREE.MathUtils.lerp(h, padBase, t);
+    }
+  }
+  return h;
+}
+
+const CATWALK_SEGMENTS = 12;
+
+interface CatwalkSpan {
+  sx: number;
+  sz: number;
+  len: number;
+  ux: number;
+  uz: number;
+  nodeY: number[];
+}
+
+function buildCatwalkSpans(world: WorldBody): CatwalkSpan[] {
+  const startY = sampleTerrainHeight(0, 0, world) + 0.24;
+  return BASE_STATIONS.filter((st) => st.id !== 'COMMAND_BRIDGE').map((st) => {
+    const sx = st.position[0];
+    const sz = st.position[2];
+    const len = Math.hypot(sx, sz);
+    const ux = sx / len;
+    const uz = sz / len;
+    const endY = sampleTerrainHeight(sx, sz, world) + 0.24;
+    const nodeY: number[] = [];
+    for (let i = 0; i <= CATWALK_SEGMENTS; i++) {
+      const t = i / CATWALK_SEGMENTS;
+      const px = sx * t;
+      const pz = sz * t;
+      const linearY = THREE.MathUtils.lerp(startY, endY, t);
+      const groundClearY = sampleTerrainHeight(px, pz, world) + 0.16;
+      nodeY.push(Math.max(linearY, groundClearY));
+    }
+    return { sx, sz, len, ux, uz, nodeY };
+  });
+}
+
+const CATWALK_SPANS_BY_WORLD: Record<WorldBody, CatwalkSpan[]> = {
+  MOON: buildCatwalkSpans('MOON'),
+  MARS: buildCatwalkSpans('MARS')
+};
+
+/**
+ * Physical surface elevation at (x, z) including terrain hills/craters,
+ * station landing pads, and terrain-hugging catwalk ramps.
+ */
+function getSurfaceHeightAt(x: number, z: number, world: WorldBody): number {
+  let h = sampleTerrainHeight(x, z, world);
+
+  for (let i = 0; i < BASE_STATIONS.length; i++) {
+    const st = BASE_STATIONS[i];
+    const sx = st.position[0];
+    const sz = st.position[2];
+    if (Math.hypot(x - sx, z - sz) <= 3.92) {
+      const padTop = sampleTerrainHeight(sx, sz, world) + 0.24;
+      if (padTop > h) h = padTop;
+    }
+  }
+
+  const spans = CATWALK_SPANS_BY_WORLD[world];
+  for (let i = 0; i < spans.length; i++) {
+    const sp = spans[i];
+    const proj = x * sp.ux + z * sp.uz;
+    if (proj >= 0 && proj <= sp.len) {
+      const perp = Math.abs(x * sp.uz - z * sp.ux);
+      if (perp <= 1.32) {
+        const segFloat = (proj / sp.len) * CATWALK_SEGMENTS;
+        const idx = Math.min(CATWALK_SEGMENTS - 1, Math.floor(segFloat));
+        const frac = segFloat - idx;
+        const deckTop = THREE.MathUtils.lerp(sp.nodeY[idx], sp.nodeY[idx + 1], frac) + 0.05;
+        if (deckTop > h) h = deckTop;
+      }
+    }
+  }
+
+  return h;
+}
+
+function sampleTerrainNormal(
+  x: number,
+  z: number,
+  world: WorldBody,
+  out: THREE.Vector3
+): THREE.Vector3 {
+  const eps = 0.35;
+  const hL = sampleTerrainHeight(x - eps, z, world);
+  const hR = sampleTerrainHeight(x + eps, z, world);
+  const hD = sampleTerrainHeight(x, z - eps, world);
+  const hU = sampleTerrainHeight(x, z + eps, world);
+  return out.set(hL - hR, 2 * eps, hD - hU).normalize();
 }
 
 /**
@@ -122,28 +281,28 @@ function makeRegolithMaps(world: WorldBody): {
     cCtx.arc(x, y, r, 0, Math.PI * 2);
     cCtx.fill();
 
-    bCtx.fillStyle = bright ? 'rgba(225,225,225,0.34)' : 'rgba(35,35,35,0.34)';
+    bCtx.fillStyle = bright ? 'rgba(240,240,240,0.45)' : 'rgba(20,20,20,0.45)';
     bCtx.beginPath();
-    bCtx.arc(x, y, r * 1.1, 0, Math.PI * 2);
+    bCtx.arc(x, y, r * 1.25, 0, Math.PI * 2);
     bCtx.fill();
   }
 
   // Crisp micrometeorite impact craters with bright ejecta rims
-  for (let c = 0; c < 42; c++) {
+  for (let c = 0; c < 56; c++) {
     const cx = Math.random() * size;
     const cy = Math.random() * size;
-    const rad = 10 + Math.random() * 34;
+    const rad = 10 + Math.random() * 38;
 
     const cg = cCtx.createRadialGradient(cx, cy, rad * 0.12, cx, cy, rad);
     if (world === 'MOON') {
-      cg.addColorStop(0, 'rgba(34,38,48,0.45)');
-      cg.addColorStop(0.68, 'rgba(62,68,80,0.24)');
-      cg.addColorStop(0.88, 'rgba(186,196,214,0.22)');
+      cg.addColorStop(0, 'rgba(30,34,44,0.52)');
+      cg.addColorStop(0.68, 'rgba(62,68,80,0.28)');
+      cg.addColorStop(0.88, 'rgba(196,206,224,0.28)');
       cg.addColorStop(1, 'rgba(94,101,115,0)');
     } else {
-      cg.addColorStop(0, 'rgba(64,22,12,0.42)');
-      cg.addColorStop(0.68, 'rgba(124,52,28,0.22)');
-      cg.addColorStop(0.88, 'rgba(218,128,84,0.22)');
+      cg.addColorStop(0, 'rgba(58,18,10,0.48)');
+      cg.addColorStop(0.68, 'rgba(124,52,28,0.26)');
+      cg.addColorStop(0.88, 'rgba(226,136,92,0.28)');
       cg.addColorStop(1, 'rgba(150,73,45,0)');
     }
     cCtx.fillStyle = cg;
@@ -152,9 +311,9 @@ function makeRegolithMaps(world: WorldBody): {
     cCtx.fill();
 
     const bg = bCtx.createRadialGradient(cx, cy, rad * 0.1, cx, cy, rad);
-    bg.addColorStop(0, 'rgba(20,20,20,0.72)');
-    bg.addColorStop(0.7, 'rgba(105,105,105,0.35)');
-    bg.addColorStop(0.88, 'rgba(235,235,235,0.55)');
+    bg.addColorStop(0, 'rgba(14,14,14,0.82)');
+    bg.addColorStop(0.7, 'rgba(105,105,105,0.42)');
+    bg.addColorStop(0.88, 'rgba(245,245,245,0.68)');
     bg.addColorStop(1, 'rgba(128,128,128,0)');
     bCtx.fillStyle = bg;
     bCtx.beginPath();
@@ -165,13 +324,13 @@ function makeRegolithMaps(world: WorldBody): {
   const map = new THREE.CanvasTexture(colorCanvas);
   map.wrapS = THREE.RepeatWrapping;
   map.wrapT = THREE.RepeatWrapping;
-  map.repeat.set(9, 9);
+  map.repeat.set(11, 11);
   map.colorSpace = THREE.SRGBColorSpace;
 
   const bumpMap = new THREE.CanvasTexture(bumpCanvas);
   bumpMap.wrapS = THREE.RepeatWrapping;
   bumpMap.wrapT = THREE.RepeatWrapping;
-  bumpMap.repeat.set(9, 9);
+  bumpMap.repeat.set(11, 11);
 
   return { map, bumpMap };
 }
@@ -497,6 +656,20 @@ function createAstronautHero(
   const kneeGeo = new THREE.TorusGeometry(0.145, 0.03, 8, 16);
   const bootGeo = new THREE.BoxGeometry(0.28, 0.18, 0.4);
 
+  // Subtle magnetic/ion hover repulsors under EVA boots
+  const repulsorRingGeo = new THREE.TorusGeometry(0.13, 0.02, 8, 16);
+  const thrusterConeGeo = new THREE.ConeGeometry(0.15, 0.28, 12, 1, true);
+  const bootThrusterMat = new THREE.MeshBasicMaterial({
+    color: world === 'MOON' ? 0x38bdf8 : 0xfb923c,
+    transparent: true,
+    opacity: 0.65,
+    side: THREE.DoubleSide,
+    depthWrite: false
+  });
+  const repulsorCollarMat = new THREE.MeshBasicMaterial({
+    color: world === 'MOON' ? 0x7dd3fc : 0xfdba74
+  });
+
   const leftLegMesh = new THREE.Mesh(legGeo, suitMat);
   leftLegMesh.position.y = -0.32;
   leftLegMesh.castShadow = true;
@@ -506,7 +679,13 @@ function createAstronautHero(
   const leftBoot = new THREE.Mesh(bootGeo, bootMat);
   leftBoot.position.set(0, -0.75, 0.06);
   leftBoot.castShadow = true;
-  leftLegPivot.add(leftLegMesh, leftKnee, leftBoot);
+  const leftRepulsorRing = new THREE.Mesh(repulsorRingGeo, repulsorCollarMat);
+  leftRepulsorRing.rotation.x = Math.PI / 2;
+  leftRepulsorRing.position.set(0, -0.84, 0.06);
+  const leftThrusterCone = new THREE.Mesh(thrusterConeGeo, bootThrusterMat);
+  leftThrusterCone.rotation.x = Math.PI;
+  leftThrusterCone.position.set(0, -0.98, 0.06);
+  leftLegPivot.add(leftLegMesh, leftKnee, leftBoot, leftRepulsorRing, leftThrusterCone);
 
   const rightLegPivot = new THREE.Group();
   rightLegPivot.position.set(0.2, 0.84, 0);
@@ -519,7 +698,13 @@ function createAstronautHero(
   const rightBoot = new THREE.Mesh(bootGeo, bootMat);
   rightBoot.position.set(0, -0.75, 0.06);
   rightBoot.castShadow = true;
-  rightLegPivot.add(rightLegMesh, rightKnee, rightBoot);
+  const rightRepulsorRing = new THREE.Mesh(repulsorRingGeo, repulsorCollarMat);
+  rightRepulsorRing.rotation.x = Math.PI / 2;
+  rightRepulsorRing.position.set(0, -0.84, 0.06);
+  const rightThrusterCone = new THREE.Mesh(thrusterConeGeo, bootThrusterMat);
+  rightThrusterCone.rotation.x = Math.PI;
+  rightThrusterCone.position.set(0, -0.98, 0.06);
+  rightLegPivot.add(rightLegMesh, rightKnee, rightBoot, rightRepulsorRing, rightThrusterCone);
 
   // Upper Torso HUT (Hard Upper Torso) + Chest DCM Control Pack + PLSS Backpack
   const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.31, 0.78, 14), suitMat);
@@ -669,6 +854,9 @@ function createAstronautHero(
     rightLegPivot,
     leftArmPivot,
     rightArmPivot,
+    leftThrusterCone,
+    rightThrusterCone,
+    bootThrusterMat,
     toolGroup,
     toolBeam,
     toolTipMat,
@@ -846,7 +1034,7 @@ export function Outpost3DViewport({
     disposables.push(hullMaps.map, hullMaps.bumpMap);
 
     // Displaced Cratered Regolith Terrain + Mountain Horizon Rim
-    const terrainSegments = isSoftwareGl ? 64 : 112;
+    const terrainSegments = isSoftwareGl ? 84 : 156;
     const groundGeo = new THREE.PlaneGeometry(175, 175, terrainSegments, terrainSegments);
     groundGeo.rotateX(-Math.PI / 2);
     const posAttr = groundGeo.attributes.position as THREE.BufferAttribute;
@@ -860,8 +1048,8 @@ export function Outpost3DViewport({
     const groundMat = new THREE.MeshStandardMaterial({
       map: regolithMaps.map,
       bumpMap: regolithMaps.bumpMap,
-      bumpScale: 0.24,
-      roughness: 0.94,
+      bumpScale: 0.46,
+      roughness: 0.96,
       metalness: 0.04
     });
     const groundMesh = new THREE.Mesh(groundGeo, groundMat);
@@ -950,43 +1138,72 @@ export function Outpost3DViewport({
       disposables.push(dGeo, dMat);
     }
 
-    // Irregular Instanced Boulders with PBR Regolith Maps
+    // Irregular Instanced Boulders with PBR Regolith Maps (interior crags + outer rim)
     const rockGeo = new THREE.DodecahedronGeometry(1.0, 1);
     const rockMat = new THREE.MeshStandardMaterial({
       map: regolithMaps.map,
       bumpMap: regolithMaps.bumpMap,
-      bumpScale: 0.15,
+      bumpScale: 0.22,
       color: world === 'MOON' ? 0x94a3b8 : 0xb45309,
-      roughness: 0.92,
+      roughness: 0.94,
       metalness: 0.05
     });
-    const rockCount = 58;
-    const rocks = new THREE.InstancedMesh(rockGeo, rockMat, rockCount);
-    const rockColor = new THREE.Color();
-    for (let i = 0; i < rockCount; i++) {
-      const angle = (i / rockCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.22;
-      const dist = 22.5 + Math.random() * 24;
+    const rockSpans = CATWALK_SPANS_BY_WORLD[world];
+    const rockCandidates: { rx: number; rz: number; s: number }[] = [];
+
+    // Interior rough rocks placed on uneven hills/craters away from pads and catwalks
+    let attempts = 0;
+    while (rockCandidates.length < 44 && attempts < 400) {
+      attempts++;
+      const angle = Math.random() * Math.PI * 2;
+      const dist = 5.8 + Math.random() * 18.5;
       const rx = Math.cos(angle) * dist;
       const rz = Math.sin(angle) * dist;
-      const s = 0.65 + Math.random() * 2.2;
+      const nearPad = BASE_STATIONS.some((st) => Math.hypot(rx - st.position[0], rz - st.position[2]) < 4.9);
+      if (nearPad) continue;
+      const nearRover = Math.hypot(rx - 4.9, rz - 3.8) < 2.9;
+      if (nearRover) continue;
+      const nearCatwalk = rockSpans.some((sp) => {
+        const proj = rx * sp.ux + rz * sp.uz;
+        const perp = Math.abs(rx * sp.uz - rz * sp.ux);
+        return proj >= 0 && proj <= sp.len && perp < 2.25;
+      });
+      if (nearCatwalk) continue;
+      rockCandidates.push({ rx, rz, s: 0.28 + Math.random() * 0.72 });
+    }
+
+    // Outer crater rim boulders
+    for (let i = 0; i < 86; i++) {
+      const angle = (i / 86) * Math.PI * 2 + (Math.random() - 0.5) * 0.22;
+      const dist = 24.5 + Math.random() * 32;
+      rockCandidates.push({
+        rx: Math.cos(angle) * dist,
+        rz: Math.sin(angle) * dist,
+        s: 0.7 + Math.random() * 2.35
+      });
+    }
+
+    const rocks = new THREE.InstancedMesh(rockGeo, rockMat, rockCandidates.length);
+    const rockColor = new THREE.Color();
+    rockCandidates.forEach(({ rx, rz, s }, i) => {
       const baseH = sampleTerrainHeight(rx, rz, world);
-      _dummy.position.set(rx, baseH + s * 0.28, rz);
+      _dummy.position.set(rx, baseH + s * 0.24, rz);
       _dummy.rotation.set(Math.random() * 2, Math.random() * 3, Math.random() * 2);
-      _dummy.scale.set(s * 1.22, s * 0.68, s);
+      _dummy.scale.set(s * 1.24, s * 0.64, s * (0.9 + Math.random() * 0.25));
       _dummy.updateMatrix();
       rocks.setMatrixAt(i, _dummy.matrix);
       rockColor
         .setHex(world === 'MOON' ? 0x94a3b8 : 0xc2410c)
-        .offsetHSL(0, 0, (Math.random() - 0.5) * 0.14);
+        .offsetHSL(0, 0, (Math.random() - 0.5) * 0.16);
       rocks.setColorAt(i, rockColor);
-    }
+    });
     rocks.computeBoundingSphere();
     rocks.castShadow = !isSoftwareGl;
     rocks.receiveShadow = true;
     scene.add(rocks);
     disposables.push(rockGeo, rockMat);
 
-    // Pressurized Metal Catwalks + Conduit Pipes + Edge Beacons
+    // Terrain-Following Pressurized Metal Catwalk Ramps + Support Pylons + Conduit Pipes
     const deckTex = makeDeckTexture();
     deckTex.anisotropy = maxAniso;
     const deckMat = new THREE.MeshStandardMaterial({
@@ -999,32 +1216,72 @@ export function Outpost3DViewport({
       roughness: 0.3,
       metalness: 0.85
     });
-    disposables.push(deckTex, deckMat, pipeMat);
+    const pylonMat = new THREE.MeshStandardMaterial({
+      color: 0x1e293b,
+      roughness: 0.45,
+      metalness: 0.78
+    });
+    disposables.push(deckTex, deckMat, pipeMat, pylonMat);
 
-    BASE_STATIONS.forEach((st) => {
-      if (st.id === 'COMMAND_BRIDGE') return;
-      const [sx, , sz] = st.position;
-      const len = Math.hypot(sx, sz);
-      const pathGeo = new THREE.BoxGeometry(2.45, 0.1, len);
-      const pathMesh = new THREE.Mesh(pathGeo, deckMat);
-      pathMesh.position.set(sx / 2, 0.05, sz / 2);
-      pathMesh.rotation.y = Math.atan2(sx, sz);
-      pathMesh.receiveShadow = true;
-      scene.add(pathMesh);
+    CATWALK_SPANS_BY_WORLD[world].forEach((span) => {
+      const yaw = Math.atan2(span.sx, span.sz);
+      const horizStep = span.len / CATWALK_SEGMENTS;
+      const pipeRightX = Math.cos(yaw) * 1.36;
+      const pipeRightZ = -Math.sin(yaw) * 1.36;
 
-      // Side conduit pipeline beside walkway
-      const pipeGeo = new THREE.CylinderGeometry(0.08, 0.08, len * 0.72, 8);
-      pipeGeo.rotateX(Math.PI / 2);
-      const pipeMesh = new THREE.Mesh(pipeGeo, pipeMat);
-      const ang = Math.atan2(sx, sz);
-      pipeMesh.position.set(
-        sx / 2 + Math.cos(ang) * 1.38,
-        0.12,
-        sz / 2 - Math.sin(ang) * 1.38
-      );
-      pipeMesh.rotation.y = ang;
-      scene.add(pipeMesh);
-      disposables.push(pathGeo, pipeGeo);
+      for (let i = 0; i < CATWALK_SEGMENTS; i++) {
+        const t0 = i / CATWALK_SEGMENTS;
+        const t1 = (i + 1) / CATWALK_SEGMENTS;
+        const tMid = (t0 + t1) * 0.5;
+        const y0 = span.nodeY[i];
+        const y1 = span.nodeY[i + 1];
+        const dy = y1 - y0;
+        const segSlopeLen = Math.hypot(horizStep, dy) + 0.06;
+        const pitch = Math.atan2(dy, horizStep);
+
+        const segGeo = new THREE.BoxGeometry(2.45, 0.1, segSlopeLen);
+        const segMesh = new THREE.Mesh(segGeo, deckMat);
+        segMesh.position.set(span.sx * tMid, (y0 + y1) * 0.5, span.sz * tMid);
+        segMesh.rotation.order = 'YXZ';
+        segMesh.rotation.y = yaw;
+        segMesh.rotation.x = -pitch;
+        segMesh.receiveShadow = true;
+        segMesh.castShadow = !isSoftwareGl;
+        scene.add(segMesh);
+        disposables.push(segGeo);
+
+        // Elevated bridge support pylons anchored into the terrain underneath
+        if (i >= 2 && i <= CATWALK_SEGMENTS - 2 && i % 2 === 0) {
+          const px = span.sx * t0;
+          const pz = span.sz * t0;
+          const groundY = sampleTerrainHeight(px, pz, world);
+          const legHeight = Math.max(0.45, y0 - groundY + 0.55);
+          const pylonGeo = new THREE.CylinderGeometry(0.11, 0.15, legHeight, 8);
+          const pylonL = new THREE.Mesh(pylonGeo, pylonMat);
+          pylonL.position.set(px - Math.cos(yaw) * 0.98, y0 - legHeight * 0.5, pz + Math.sin(yaw) * 0.98);
+          const pylonR = new THREE.Mesh(pylonGeo, pylonMat);
+          pylonR.position.set(px + Math.cos(yaw) * 0.98, y0 - legHeight * 0.5, pz - Math.sin(yaw) * 0.98);
+          scene.add(pylonL, pylonR);
+          disposables.push(pylonGeo);
+        }
+
+        // Segmented terrain-following conduit pipeline beside walkway
+        if (i >= 1 && i <= CATWALK_SEGMENTS - 2) {
+          const pipeGeo = new THREE.CylinderGeometry(0.08, 0.08, segSlopeLen, 8);
+          pipeGeo.rotateX(Math.PI / 2);
+          const pipeMesh = new THREE.Mesh(pipeGeo, pipeMat);
+          pipeMesh.position.set(
+            span.sx * tMid + pipeRightX,
+            (y0 + y1) * 0.5 + 0.08,
+            span.sz * tMid + pipeRightZ
+          );
+          pipeMesh.rotation.order = 'YXZ';
+          pipeMesh.rotation.y = yaw;
+          pipeMesh.rotation.x = -pitch;
+          scene.add(pipeMesh);
+          disposables.push(pipeGeo);
+        }
+      }
     });
 
     // Shared Aerospace Station Materials
@@ -1070,10 +1327,16 @@ export function Outpost3DViewport({
     });
     disposables.push(metalBodyMat, kaptonMat, darkMetalMat, glassDomeMat, trussFrameMat);
 
-    // Parked 6-Wheeled Pressurized Exploration Rover near Command Hub
+    // Parked 6-Wheeled Pressurized Exploration Rover grounded & tilted to terrain slope
     const roverGroup = new THREE.Group();
-    roverGroup.position.set(4.9, 0, 3.8);
-    roverGroup.rotation.y = -0.65;
+    const roverX = 4.9;
+    const roverZ = 3.8;
+    const roverY = sampleTerrainHeight(roverX, roverZ, world);
+    roverGroup.position.set(roverX, roverY, roverZ);
+    sampleTerrainNormal(roverX, roverZ, world, _vec3A);
+    _quatA.setFromUnitVectors(_vec3Up, _vec3A);
+    _quatYaw.setFromAxisAngle(_vec3Up, -0.65);
+    roverGroup.quaternion.multiplyQuaternions(_quatA, _quatYaw);
     const roverBody = new THREE.Mesh(new THREE.BoxGeometry(1.75, 0.85, 2.6), metalBodyMat);
     roverBody.position.y = 0.85;
     roverBody.castShadow = true;
@@ -1218,11 +1481,12 @@ export function Outpost3DViewport({
     disposables.push(puffGeo, puffMat);
 
     const spawnDustPuff = (px: number, pz: number, count = 3) => {
+      const groundH = getSurfaceHeightAt(px, pz, world);
       for (let i = 0; i < count; i++) {
         const m = new THREE.Mesh(puffGeo, puffMat.clone());
         m.position.set(
           px + (Math.random() - 0.5) * 0.55,
-          0.16,
+          groundH + 0.16,
           pz + (Math.random() - 0.5) * 0.55
         );
         m.scale.setScalar(0.6 + Math.random() * 0.7);
@@ -1231,19 +1495,20 @@ export function Outpost3DViewport({
       }
     };
 
-    // Build all 5 Highly Detailed Aerospace Stations
+    // Build all 5 Highly Detailed Aerospace Stations anchored to local terrain elevation
     BASE_STATIONS.forEach((station) => {
       const group = new THREE.Group();
-      group.position.set(station.position[0], 0, station.position[2]);
+      const stTerrainY = sampleTerrainHeight(station.position[0], station.position[2], world);
+      group.position.set(station.position[0], stTerrainY, station.position[2]);
 
-      const padGeo = new THREE.CylinderGeometry(3.6, 4.0, 0.24, 28);
+      const padGeo = new THREE.CylinderGeometry(3.6, 4.25, 0.9, 28);
       const padMesh = new THREE.Mesh(padGeo, darkMetalMat);
-      padMesh.position.y = 0.12;
+      padMesh.position.y = -0.21;
       padMesh.receiveShadow = true;
       group.add(padMesh);
       disposables.push(padGeo);
 
-      const ringGeo = new THREE.RingGeometry(3.75, 4.12, 36);
+      const ringGeo = new THREE.RingGeometry(3.38, 3.64, 36);
       const ringMat = new THREE.MeshBasicMaterial({
         color: new THREE.Color(station.accentHex),
         side: THREE.DoubleSide,
@@ -1252,7 +1517,7 @@ export function Outpost3DViewport({
       });
       const ringMesh = new THREE.Mesh(ringGeo, ringMat);
       ringMesh.rotation.x = -Math.PI / 2;
-      ringMesh.position.y = 0.05;
+      ringMesh.position.y = 0.255;
       group.add(ringMesh);
       padRingMats.set(station.id, ringMat);
       disposables.push(ringGeo, ringMat);
@@ -1655,9 +1920,10 @@ export function Outpost3DViewport({
     scene.add(waypointMesh);
     disposables.push(waypointGeo, waypointMat);
 
-    // High-Detail EMU Astronaut Player
+    // High-Detail EMU Astronaut Player (levitating slightly above terrain)
     const hero = createAstronautHero(world, hullMaps, kaptonMaps);
-    hero.root.position.set(0, 0, 4.5);
+    const startSurfaceY = getSurfaceHeightAt(0, 4.5, world);
+    hero.root.position.set(0, startSurfaceY + (world === 'MOON' ? 0.36 : 0.26), 4.5);
     scene.add(hero.root);
 
     // Physics & Movement State
@@ -1756,7 +2022,8 @@ export function Outpost3DViewport({
             _vec3B.normalize().multiplyScalar(3.3);
             walkTarget = _vec3A.clone().add(_vec3B);
             pendingStationOpen = hitId;
-            waypointMesh.position.set(walkTarget.x, 0.06, walkTarget.z);
+            const wpY = getSurfaceHeightAt(walkTarget.x, walkTarget.z, world);
+            waypointMesh.position.set(walkTarget.x, wpY + 0.08, walkTarget.z);
             waypointMesh.visible = true;
             haptics.tick();
           }
@@ -1764,15 +2031,22 @@ export function Outpost3DViewport({
         }
       }
 
-      if (_raycaster.ray.intersectPlane(_groundPlane, _hitPoint)) {
-        const clampedR = Math.min(20, Math.hypot(_hitPoint.x, _hitPoint.z));
-        const ang = Math.atan2(_hitPoint.z, _hitPoint.x);
-        walkTarget = new THREE.Vector3(Math.cos(ang) * clampedR, 0, Math.sin(ang) * clampedR);
-        pendingStationOpen = null;
-        waypointMesh.position.set(walkTarget.x, 0.06, walkTarget.z);
-        waypointMesh.visible = true;
-        haptics.tick();
+      const groundHits = _raycaster.intersectObject(groundMesh, false);
+      if (groundHits.length > 0) {
+        _hitPoint.copy(groundHits[0].point);
+      } else if (!_raycaster.ray.intersectPlane(_groundPlane, _hitPoint)) {
+        return;
       }
+
+      const clampedR = Math.min(24.2, Math.hypot(_hitPoint.x, _hitPoint.z));
+      const ang = Math.atan2(_hitPoint.z, _hitPoint.x);
+      const tx = Math.cos(ang) * clampedR;
+      const tz = Math.sin(ang) * clampedR;
+      walkTarget = new THREE.Vector3(tx, 0, tz);
+      pendingStationOpen = null;
+      waypointMesh.position.set(tx, getSurfaceHeightAt(tx, tz, world) + 0.08, tz);
+      waypointMesh.visible = true;
+      haptics.tick();
     };
 
     const handleWheel = (e: WheelEvent) => {
@@ -1896,24 +2170,39 @@ export function Outpost3DViewport({
         }
 
         const radial = Math.hypot(hero.root.position.x, hero.root.position.z);
-        if (radial > 20.5) {
-          const scale = 20.5 / radial;
+        if (radial > 24.5) {
+          const scale = 24.5 / radial;
           hero.root.position.x *= scale;
           hero.root.position.z *= scale;
         }
       }
 
-      // Gravity Jump Physics + Touchdown Dust Plume
+      // Physical Terrain Elevation + Subtle Astronaut Hover-Levitation + Gravity Jump Physics
+      const surfaceY = getSurfaceHeightAt(hero.root.position.x, hero.root.position.z, world);
+      const hoverBase = world === 'MOON' ? 0.38 : 0.27;
+      const hoverBob = Math.sin(elapsed * 3.1) * 0.075;
+      const levitateY = surfaceY + hoverBase + hoverBob;
+
       if (!isGrounded || playerVy > 0) {
         playerVy -= gravityAccel * dt;
         hero.root.position.y += playerVy * dt;
-        if (hero.root.position.y <= 0) {
-          hero.root.position.y = 0;
+        if (hero.root.position.y <= levitateY) {
+          hero.root.position.y = levitateY;
           playerVy = 0;
           isGrounded = true;
           spawnDustPuff(hero.root.position.x, hero.root.position.z, 5);
         }
+      } else {
+        hero.root.position.y = THREE.MathUtils.damp(hero.root.position.y, levitateY, 13, dt);
       }
+
+      // Animate Boot Repulsor Glow & Thruster Cones
+      hero.bootThrusterMat.opacity = isGrounded
+        ? 0.56 + Math.sin(elapsed * 10) * 0.14
+        : 0.9;
+      const thrusterScale = isGrounded ? 0.92 + Math.sin(elapsed * 12) * 0.14 : 1.38;
+      hero.leftThrusterCone.scale.set(1, thrusterScale, 1);
+      hero.rightThrusterCone.scale.set(1, thrusterScale, 1);
 
       // Trigger Post-Decision / Station Repair: Astronaut Walks to Fixation Site & Performs Animation
       const currentAct = activeActionRef.current;
@@ -1933,13 +2222,15 @@ export function Outpost3DViewport({
           }
           autoWalkTarget = _vec3A.clone().add(_vec3B);
           autoLookTarget = _vec3A.clone();
-          actionVfxGroup.position.set(targetSt.position[0], 0.25, targetSt.position[2]);
-          waypointMesh.position.set(autoWalkTarget.x, 0.06, autoWalkTarget.z);
+          const vfxY = getSurfaceHeightAt(targetSt.position[0], targetSt.position[2], world);
+          actionVfxGroup.position.set(targetSt.position[0], vfxY + 0.25, targetSt.position[2]);
+          const wpY = getSurfaceHeightAt(autoWalkTarget.x, autoWalkTarget.z, world);
+          waypointMesh.position.set(autoWalkTarget.x, wpY + 0.08, autoWalkTarget.z);
           waypointMesh.visible = true;
         } else {
           autoWalkTarget = hero.root.position.clone();
           autoLookTarget = hero.root.position.clone().add(new THREE.Vector3(0, 0, -2));
-          actionVfxGroup.position.set(hero.root.position.x, 0.25, hero.root.position.z);
+          actionVfxGroup.position.set(hero.root.position.x, surfaceY + 0.25, hero.root.position.z);
         }
 
         const hex =
@@ -1957,7 +2248,10 @@ export function Outpost3DViewport({
         hero.auraMat.color.setHex(hex);
         hero.sparkMat.color.setHex(hex);
 
-        const distToSite = hero.root.position.distanceTo(autoWalkTarget);
+        const distToSite = Math.hypot(
+          hero.root.position.x - autoWalkTarget.x,
+          hero.root.position.z - autoWalkTarget.z
+        );
         if (distToSite > 0.55) {
           autoActionStage = 'WALKING';
           actionAnimRemaining = 0;
@@ -2094,10 +2388,13 @@ export function Outpost3DViewport({
           hero.leftArmPivot.rotation.x = -swing * 0.8;
           hero.rightArmPivot.rotation.x = swing * 0.8;
         } else {
-          hero.leftLegPivot.rotation.x = THREE.MathUtils.damp(hero.leftLegPivot.rotation.x, 0, 10, dt);
-          hero.rightLegPivot.rotation.x = THREE.MathUtils.damp(hero.rightLegPivot.rotation.x, 0, 10, dt);
-          hero.leftArmPivot.rotation.x = THREE.MathUtils.damp(hero.leftArmPivot.rotation.x, 0, 10, dt);
-          hero.rightArmPivot.rotation.x = THREE.MathUtils.damp(hero.rightArmPivot.rotation.x, 0, 10, dt);
+          // Relaxed floating hover posture when idle or gliding mid-air
+          const floatLeg = Math.sin(elapsed * 2.4) * 0.07;
+          const floatArm = Math.cos(elapsed * 2.1) * 0.05;
+          hero.leftLegPivot.rotation.x = THREE.MathUtils.damp(hero.leftLegPivot.rotation.x, floatLeg, 8, dt);
+          hero.rightLegPivot.rotation.x = THREE.MathUtils.damp(hero.rightLegPivot.rotation.x, -floatLeg, 8, dt);
+          hero.leftArmPivot.rotation.x = THREE.MathUtils.damp(hero.leftArmPivot.rotation.x, -floatArm, 8, dt);
+          hero.rightArmPivot.rotation.x = THREE.MathUtils.damp(hero.rightArmPivot.rotation.x, floatArm, 8, dt);
         }
       }
 
@@ -2122,9 +2419,11 @@ export function Outpost3DViewport({
         dustCloud.rotation.y += dt * 0.03;
       }
 
-      const shadowScale = THREE.MathUtils.clamp(1 - hero.root.position.y * 0.12, 0.35, 1);
+      // Project Ground Shadow cleanly onto actual sloped terrain/pad/catwalk surface beneath hero
+      const heightAboveSurface = Math.max(0, hero.root.position.y - surfaceY);
+      const shadowScale = THREE.MathUtils.clamp(1 - heightAboveSurface * 0.14, 0.32, 1);
       hero.shadowDisc.scale.setScalar(shadowScale);
-      hero.shadowDisc.position.y = 0.03 - hero.root.position.y;
+      hero.shadowDisc.position.y = surfaceY - hero.root.position.y + 0.045;
 
       // Proximity Station Detection
       let closestId: StationId | null = null;

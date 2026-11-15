@@ -21,6 +21,7 @@ import {
   Radio,
   RotateCcw,
   Shield,
+  SlidersHorizontal,
   Sparkles,
   Sprout,
   Sun,
@@ -74,6 +75,8 @@ interface BottomControlDockProps {
   commsLoading: boolean;
   radioSpeaking: boolean;
   dpadRef: React.MutableRefObject<DpadVector>;
+  isOpen: boolean;
+  onToggleOpen: () => void;
   onJump: () => void;
   onOpenEmergencyModal: () => void;
   onStationRepair: (actionId: string) => void;
@@ -103,6 +106,8 @@ export function BottomControlDock({
   commsLoading,
   radioSpeaking,
   dpadRef,
+  isOpen,
+  onToggleOpen,
   onJump,
   onOpenEmergencyModal,
   onStationRepair,
@@ -113,7 +118,6 @@ export function BottomControlDock({
   onSandboxTrigger,
   onBraceForStorm
 }: BottomControlDockProps) {
-  const [collapsed, setCollapsed] = useState(false);
   const [activeTab, setActiveTab] = useState<DockTab>(mode === 'SANDBOX' ? 'POWER' : 'STATION');
 
   const isSandbox = mode === 'SANDBOX';
@@ -165,6 +169,40 @@ export function BottomControlDock({
     tabs.push({ id: 'SANDBOX_LAB', label: 'Sandbox Lab', icon: FlaskConical });
   }
 
+  if (!isOpen) {
+    return (
+      <div className="pointer-events-auto mx-auto flex flex-wrap items-center justify-center gap-2">
+        {activeEmergency && (
+          <button
+            type="button"
+            onClick={onOpenEmergencyModal}
+            className="btn-tactile px-3.5 py-2 rounded-2xl bg-rose-600 hover:bg-rose-500 border border-rose-400 text-white text-xs font-extrabold shadow-xl flex items-center gap-1.5 cursor-pointer"
+          >
+            <AlertTriangle className="w-4 h-4 animate-bounce" />
+            <span>
+              {emergencyHandsOnReady ? 'Solve On-Site (Bonus!)' : 'Solve Emergency!'}
+            </span>
+          </button>
+        )}
+
+        <button
+          type="button"
+          onClick={onToggleOpen}
+          className="btn-tactile px-4 py-2 rounded-2xl bg-slate-950/92 hover:bg-slate-900 border border-sky-400/70 text-sky-100 text-xs font-extrabold shadow-xl flex items-center gap-2 cursor-pointer"
+        >
+          <SlidersHorizontal className="w-4 h-4 text-sky-300" />
+          <span>Show Interface</span>
+          {stationMeta && (
+            <span className="text-[11px] font-mono-tabular text-emerald-300">
+              · {stationMeta.shortName}
+            </span>
+          )}
+          <ChevronUp className="w-3.5 h-3.5 text-sky-300" />
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="pointer-events-auto w-full max-w-[980px] mx-auto rounded-2xl bg-slate-950/95 border border-slate-700 shadow-2xl text-slate-100 overflow-hidden">
       {/* Persistent Top Strip inside Dock */}
@@ -202,11 +240,11 @@ export function BottomControlDock({
 
           <button
             type="button"
-            onClick={() => setCollapsed((c) => !c)}
+            onClick={onToggleOpen}
             className="btn-tactile px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 text-xs font-bold flex items-center gap-1 cursor-pointer"
           >
-            {collapsed ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-            <span>{collapsed ? 'Controls' : 'Hide'}</span>
+            <ChevronDown className="w-3.5 h-3.5" />
+            <span>Hide Interface</span>
           </button>
 
           <button
@@ -225,9 +263,8 @@ export function BottomControlDock({
         </div>
       </div>
 
-      {/* Collapsible Body */}
-      {!collapsed && (
-        <div className="p-3">
+      {/* Expanded Body */}
+      <div className="p-3">
           <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
             <div className="flex flex-wrap items-center gap-1.5">
               {tabs.map((tab) => {
@@ -753,7 +790,6 @@ export function BottomControlDock({
             </div>
           )}
         </div>
-      )}
     </div>
   );
 }

@@ -13,6 +13,7 @@ import { HudTopBar } from './components/HudTopBar';
 import { OnboardingModal } from './components/OnboardingModal';
 import { DpadVector, Outpost3DViewport } from './components/Outpost3DViewport';
 import { SolDebriefModal } from './components/SolDebriefModal';
+import { SpaceLandingPage } from './components/SpaceLandingPage';
 import { StormImpactOverlay } from './components/StormImpactOverlay';
 import { StoryCutsceneOverlay } from './components/StoryCutsceneOverlay';
 import { SurpriseEmergencyModal } from './components/SurpriseEmergencyModal';
@@ -65,6 +66,7 @@ import {
   SLIDER_MAX_KW,
   stepShiftPhysics
 } from './utils/physicsSimulation';
+import { musicEngine } from './utils/musicEngine';
 import { radioVoiceEngine } from './utils/radioVoiceEngine';
 import { soundEngine } from './utils/soundEngine';
 
@@ -121,6 +123,8 @@ export function App() {
 
   const [bannerText, setBannerText] = useState<string | null>(null);
   const [muted, setMuted] = useState(false);
+  const [musicEnabled, setMusicEnabled] = useState(true);
+  const [showInterface, setShowInterface] = useState(false);
 
   const [commsDelaySeconds, setCommsDelaySeconds] = useState(0);
   const [commsLoading, setCommsLoading] = useState(false);
@@ -167,6 +171,7 @@ export function App() {
     let lastHoverTarget: Element | null = null;
     const onPointerDown = (e: PointerEvent) => {
       soundEngine.unlock();
+      musicEngine.unlock();
       const target = e.target as Element | null;
       const btn = target?.closest('button');
       if (btn && !btn.disabled) {
@@ -176,6 +181,10 @@ export function App() {
         void (btn as HTMLElement).offsetWidth;
         btn.classList.add('animate-btn-pop');
       }
+    };
+    const onFirstKeyDown = () => {
+      soundEngine.unlock();
+      musicEngine.unlock();
     };
     const onPointerOver = (e: PointerEvent) => {
       const target = e.target as Element | null;
@@ -190,12 +199,27 @@ export function App() {
       }
     };
     window.addEventListener('pointerdown', onPointerDown, true);
+    window.addEventListener('keydown', onFirstKeyDown, true);
     window.addEventListener('pointerover', onPointerOver, true);
     return () => {
       window.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('keydown', onFirstKeyDown, true);
       window.removeEventListener('pointerover', onPointerOver, true);
     };
   }, []);
+
+  // Sync technical background soundtrack mood & mute state
+  useEffect(() => {
+    musicEngine.setPhase(phase);
+  }, [phase]);
+
+  useEffect(() => {
+    musicEngine.setMuted(muted);
+  }, [muted]);
+
+  useEffect(() => {
+    musicEngine.setEnabled(musicEnabled);
+  }, [musicEnabled]);
 
   const showToast = useCallback((msg: string) => {
     setBannerText(msg);
@@ -445,7 +469,8 @@ export function App() {
           setPhase('SURPRISE_DECISION');
         } else if (nearestStation) {
           const st = BASE_STATIONS.find((s) => s.id === nearestStation);
-          if (st) showToast(`Inspecting ${st.name}: Use the Walk & Fix buttons below!`);
+          setShowInterface(true);
+          if (st) showToast(`Inspecting ${st.name}: Repair controls opened below!`);
         }
       }
     };
@@ -482,6 +507,7 @@ export function App() {
     setSolSurpriseDecisions([]);
     setSolGadgetsUsed([]);
     setShiftSecondsLeft(SHIFT_DURATION_SECONDS);
+    setShowInterface(false);
 
     if (skipStory && mode === 'SANDBOX') {
       showToast('Welcome to Sandbox Safe Lab! Experiment with power & walk all 5 stations freely.');
@@ -504,6 +530,7 @@ export function App() {
     (payload: Omit<ActiveActionSequence, 'nonce'>) => {
       actionNonceRef.current += 1;
       setActionStage('WALKING');
+      setShowInterface(false);
       setActiveAction({ ...payload, nonce: actionNonceRef.current });
       if (payload.blocking) {
         setPhase('ACTION_EXECUTION');
@@ -843,6 +870,7 @@ export function App() {
       }
       const st = BASE_STATIONS.find((s) => s.id === stationId);
       if (st) {
+        setShowInterface(true);
         showToast(`${st.name}: ${st.role}`);
       }
     },
@@ -856,29 +884,31 @@ export function App() {
   return (
     <div className="relative w-screen h-dvh overflow-hidden bg-[#060913] select-none">
       {/* FULL-SCREEN INTERACTIVE 3D MOON / MARS OUTPOST */}
-      <Outpost3DViewport
-        world={world}
-        phase={phase}
-        systems={systems}
-        power={power}
-        upcomingFlareSeverity={upcomingFlare?.severityLevel}
-        activeAction={activeAction}
-        activeEmergencyStation={activeEmergency?.stationId ?? null}
-        nearestStation={nearestStation}
-        jumpNonce={jumpNonce}
-        dpadRef={dpadRef}
-        onNearestStationChange={(st, dist) => {
-          setNearestStation(st);
-          setNearestDistance(dist);
-        }}
-        onSelectStation={handleSelectStationIn3D}
-        onFootstepJump={() => soundEngine.playSliderTick(35)}
-        onActionStageChange={(stage) => setActionStage(stage)}
-        onActionComplete={() => {
-          setActiveAction(null);
-          setPhase((p) => (p === 'ACTION_EXECUTION' ? 'ACTIVE_SHIFT' : p));
-        }}
-      />
+      {phase !== 'ONBOARDING' && (
+        <Outpost3DViewport
+          world={world}
+          phase={phase}
+          systems={systems}
+          power={power}
+          upcomingFlareSeverity={upcomingFlare?.severityLevel}
+          activeAction={activeAction}
+          activeEmergencyStation={activeEmergency?.stationId ?? null}
+          nearestStation={nearestStation}
+          jumpNonce={jumpNonce}
+          dpadRef={dpadRef}
+          onNearestStationChange={(st, dist) => {
+            setNearestStation(st);
+            setNearestDistance(dist);
+          }}
+          onSelectStation={handleSelectStationIn3D}
+          onFootstepJump={() => soundEngine.playSliderTick(35)}
+          onActionStageChange={(stage) => setActionStage(stage)}
+          onActionComplete={() => {
+            setActiveAction(null);
+            setPhase((p) => (p === 'ACTION_EXECUTION' ? 'ACTIVE_SHIFT' : p));
+          }}
+        />
+      )}
 
       {/* POST-DECISION & REPAIR ANIMATED ACTION EXECUTION */}
       {activeAction && (
@@ -948,7 +978,7 @@ export function App() {
       )}
 
       {/* NON-BLOCKING FLOATING HUD LAYER */}
-      {phase !== 'STORY_INTRO' && (
+      {phase !== 'STORY_INTRO' && phase !== 'ONBOARDING' && (
         <div className="pointer-events-none fixed inset-0 z-20 flex flex-col justify-between p-2.5 sm:p-4">
           <div className="space-y-2">
             <HudTopBar
@@ -964,13 +994,19 @@ export function App() {
               systems={systems}
               upcomingFlare={upcomingFlare}
               muted={muted}
+              musicEnabled={musicEnabled}
               onOpenForecast={() => setShowForecastModal(true)}
               onOpenHelp={() => setShowHelpModal(true)}
               onToggleMute={() => {
                 const next = !muted;
                 soundEngine.muted = next;
+                musicEngine.setMuted(next);
                 if (next) radioVoiceEngine.stop();
                 setMuted(next);
+              }}
+              onToggleMusic={() => {
+                musicEngine.unlock();
+                setMusicEnabled((prev) => !prev);
               }}
               onRestart={() => {
                 radioVoiceEngine.stop();
@@ -978,7 +1014,7 @@ export function App() {
               }}
             />
 
-            {(bannerText || highCo2) && (
+            {!activeAction && (bannerText || highCo2) && (
               <div className="pointer-events-auto max-w-xl mx-auto rounded-xl bg-slate-950/92 border border-sky-400/60 px-3.5 py-2 text-xs font-bold text-slate-100 shadow-lg flex items-center justify-center gap-2 text-center">
                 {highCo2 && !bannerText ? (
                   <>
@@ -998,26 +1034,29 @@ export function App() {
             )}
           </div>
 
-          {(phase === 'ACTIVE_SHIFT' || phase === 'STORM_SIM' || phase === 'SURPRISE_DECISION') && (
-            <BottomControlDock
-              world={world}
-              mode={mode}
-              marsSite={activeMarsSite}
-              phase={phase}
-              nearestStation={nearestStation}
-              nearestDistance={nearestDistance}
-              systems={systems}
-              power={power}
-              maxGridBudgetKw={maxGridBudgetKw}
-              backpack={backpack}
-              activeEmergency={activeEmergency}
-              upcomingFlare={upcomingFlare}
-              commsTarget={world}
-              commsDelaySeconds={commsDelaySeconds}
-              commsMessage={commsMessage}
-              commsLoading={commsLoading}
-              radioSpeaking={radioSpeaking}
-              dpadRef={dpadRef}
+          {!activeAction &&
+            (phase === 'ACTIVE_SHIFT' || phase === 'STORM_SIM' || phase === 'SURPRISE_DECISION') && (
+              <BottomControlDock
+                world={world}
+                mode={mode}
+                marsSite={activeMarsSite}
+                phase={phase}
+                nearestStation={nearestStation}
+                nearestDistance={nearestDistance}
+                systems={systems}
+                power={power}
+                maxGridBudgetKw={maxGridBudgetKw}
+                backpack={backpack}
+                activeEmergency={activeEmergency}
+                upcomingFlare={upcomingFlare}
+                commsTarget={world}
+                commsDelaySeconds={commsDelaySeconds}
+                commsMessage={commsMessage}
+                commsLoading={commsLoading}
+                radioSpeaking={radioSpeaking}
+                dpadRef={dpadRef}
+                isOpen={showInterface}
+                onToggleOpen={() => setShowInterface((prev) => !prev)}
               onJump={() => {
                 setJumpNonce((n) => n + 1);
                 soundEngine.playSliderTick(35);
@@ -1049,23 +1088,43 @@ export function App() {
         />
       )}
 
-      {/* PHASE MODALS */}
-      {(phase === 'ONBOARDING' || showHelpModal) && (
+      {/* CREATIVE 3D COSMIC LANDING FIRST PAGE */}
+      {phase === 'ONBOARDING' && !showHelpModal && (
+        <SpaceLandingPage
+          world={world}
+          mode={mode}
+          selectedMarsSite={selectedMarsSite}
+          muted={muted}
+          musicEnabled={musicEnabled}
+          onSelectWorld={(w) => setWorld(w)}
+          onSelectMode={(m) => setMode(m)}
+          onSelectMarsSite={(site) => setSelectedMarsSite(site)}
+          onToggleMute={() => {
+            const next = !muted;
+            soundEngine.muted = next;
+            musicEngine.setMuted(next);
+            if (next) radioVoiceEngine.stop();
+            setMuted(next);
+          }}
+          onToggleMusic={() => {
+            musicEngine.unlock();
+            setMusicEnabled((prev) => !prev);
+          }}
+          onStart={(skipStory) => handleStartMission(Boolean(skipStory))}
+        />
+      )}
+
+      {/* MID-GAME QUICK-START HELP MODAL */}
+      {showHelpModal && (
         <OnboardingModal
-          isHelpMode={showHelpModal}
+          isHelpMode
           world={world}
           mode={mode}
           selectedMarsSite={selectedMarsSite}
           onSelectWorld={(w) => setWorld(w)}
           onSelectMode={(m) => setMode(m)}
           onSelectMarsSite={(site) => setSelectedMarsSite(site)}
-          onStart={(skipStory) => {
-            if (showHelpModal) {
-              setShowHelpModal(false);
-            } else {
-              handleStartMission(Boolean(skipStory));
-            }
-          }}
+          onStart={() => setShowHelpModal(false)}
         />
       )}
 

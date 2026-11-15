@@ -1,4 +1,5 @@
 import { VoiceProfile } from '../types/game';
+import { musicEngine } from './musicEngine';
 import { soundEngine } from './soundEngine';
 
 interface PlayVoiceOptions {
@@ -130,6 +131,7 @@ class RadioVoiceEngine {
 
   public stop() {
     this.playToken++;
+    musicEngine.setDucked(false);
     if (this.activeSource) {
       try {
         this.activeSource.onended = null;
@@ -285,9 +287,11 @@ class RadioVoiceEngine {
 
     const myToken = ++this.playToken;
     this.activeEndCallback = onEnd ?? null;
+    musicEngine.setDucked(true);
     onStart?.();
 
     const finishPlay = () => {
+      musicEngine.setDucked(false);
       if (this.activeNoiseSource) {
         try {
           this.activeNoiseSource.stop();
