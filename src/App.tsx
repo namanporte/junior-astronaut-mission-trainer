@@ -29,7 +29,7 @@ import {
   generateEarthCommsHint,
   generateSolDebriefFeedback,
   generateVictoryCommendation
-} from './services/capcomAiService';
+} from './services/flightCommsService';
 import {
   fetchNasaDonkiFlares,
   NASA_ARCHIVE_FALLBACK_EVENTS
@@ -118,7 +118,7 @@ export function App() {
   const [failureReason, setFailureReason] = useState<string | null>(null);
   const [victoryCommendation, setVictoryCommendation] = useState<{
     text: string;
-    isAiGenerated: boolean;
+    isLiveTransmission: boolean;
   } | null>(null);
 
   const [bannerText, setBannerText] = useState<string | null>(null);
@@ -131,7 +131,7 @@ export function App() {
   const [radioSpeaking, setRadioSpeaking] = useState(false);
   const [commsMessage, setCommsMessage] = useState<{
     text: string;
-    isAiGenerated: boolean;
+    isLiveTransmission: boolean;
   } | null>(null);
 
   const isSandbox = mode === 'SANDBOX';
@@ -261,7 +261,7 @@ export function App() {
     [isSandbox]
   );
 
-  // Trigger end-of-Sol solar storm impact animation + Gemini AI debrief
+  // Trigger end-of-Sol solar storm impact animation + flight debrief
   const handleBraceForStorm = useCallback(() => {
     if (phase !== 'ACTIVE_SHIFT') return;
     soundEngine.playButtonClick('launch');
@@ -302,7 +302,7 @@ export function App() {
         systems,
         flareEvent: upcomingFlare,
         capcomMessage: capcomResp.text,
-        capcomAiPowered: capcomResp.isAiGenerated
+        capcomLiveRadio: capcomResp.isLiveTransmission
       });
 
       // Keep Sandbox Mode strictly safe even after a test storm

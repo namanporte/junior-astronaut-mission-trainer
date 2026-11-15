@@ -23,10 +23,7 @@ function getGeminiClient(apiVersion = 'v1beta'): GoogleGenAI | null {
     apiKey,
     apiVersion,
     httpOptions: {
-      apiVersion,
-      headers: {
-        'User-Agent': 'aistudio-build'
-      }
+      apiVersion
     }
   });
 }
@@ -38,7 +35,7 @@ async function startServer() {
   app.post('/api/tts', async (req: Request, res: Response) => {
     const ai = getGeminiClient('v1beta');
     if (!ai) {
-      res.status(503).json({ error: 'Gemini API key unavailable' });
+      res.status(503).json({ error: 'Voice service key unavailable' });
       return;
     }
 
@@ -112,7 +109,7 @@ async function startServer() {
   app.post('/api/capcom/debrief', async (req: Request, res: Response) => {
     const ai = getGeminiClient();
     if (!ai) {
-      res.status(503).json({ error: 'Gemini API key unavailable' });
+      res.status(503).json({ error: 'Flight radio key unavailable' });
       return;
     }
 
@@ -151,7 +148,7 @@ Systems: Water/O2 ${waterO2Pct}%, Crops ${cropsPct}%, Temp ${cabinTempC}°C, CO2
 
       const text = response.text?.trim();
       if (!text) {
-        res.status(502).json({ error: 'Empty Gemini response' });
+        res.status(502).json({ error: 'Empty radio response' });
         return;
       }
 
@@ -166,7 +163,7 @@ Systems: Water/O2 ${waterO2Pct}%, Crops ${cropsPct}%, Temp ${cabinTempC}°C, CO2
   app.post('/api/capcom/hint', async (req: Request, res: Response) => {
     const ai = getGeminiClient();
     if (!ai) {
-      res.status(503).json({ error: 'Gemini API key unavailable' });
+      res.status(503).json({ error: 'Flight radio key unavailable' });
       return;
     }
 
@@ -196,7 +193,7 @@ Sliders: Electrolysis ${currentSliders?.electrolysisKw}⚡ (req ${requiredLifeSu
 
       const text = response.text?.trim();
       if (!text) {
-        res.status(502).json({ error: 'Empty Gemini response' });
+        res.status(502).json({ error: 'Empty radio response' });
         return;
       }
 
@@ -211,7 +208,7 @@ Sliders: Electrolysis ${currentSliders?.electrolysisKw}⚡ (req ${requiredLifeSu
   app.post('/api/capcom/victory', async (req: Request, res: Response) => {
     const ai = getGeminiClient();
     if (!ai) {
-      res.status(503).json({ error: 'Gemini API key unavailable' });
+      res.status(503).json({ error: 'Flight radio key unavailable' });
       return;
     }
 
@@ -234,7 +231,7 @@ Sliders: Electrolysis ${currentSliders?.electrolysisKw}⚡ (req ${requiredLifeSu
 
       const text = response.text?.trim();
       if (!text) {
-        res.status(502).json({ error: 'Empty Gemini response' });
+        res.status(502).json({ error: 'Empty radio response' });
         return;
       }
 
@@ -262,7 +259,7 @@ Sliders: Electrolysis ${currentSliders?.electrolysisKw}⚡ (req ${requiredLifeSu
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Lunar/Mars Outpost server running on http://0.0.0.0:${PORT}`);
+    console.log(`AstroJun server running on http://0.0.0.0:${PORT}`);
   });
 }
 

@@ -929,7 +929,7 @@ export function SpaceLandingPage({
       <div aria-hidden="true" className="fixed inset-0 overflow-hidden pointer-events-none">
         {!nebulaImgFailed ? (
           <img
-            src="/assets/aistudio/image_298904f8.jpeg"
+            src="/assets/cosmic-nebula.jpeg"
             alt="Deep cosmic violet and gold Milky Way starfield"
             referrerPolicy="no-referrer"
             onError={() => setNebulaImgFailed(true)}
@@ -962,7 +962,7 @@ export function SpaceLandingPage({
             </div>
             <div className="min-w-0">
               <div className="font-display font-extrabold text-base sm:text-lg tracking-tight text-white truncate">
-                Junior Astronaut
+                AstroJun
               </div>
               <div className="text-[11px] font-mono-tabular text-indigo-200/80 truncate">
                 3D Planetary Outpost Simulation

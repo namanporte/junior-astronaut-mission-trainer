@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Award, Headphones, RotateCcw, ShieldAlert, Sparkles } from 'lucide-react';
+import { Award, Headphones, RotateCcw, ShieldAlert } from 'lucide-react';
 import { CommanderRank, MissionTraceEntry, WorldBody } from '../types/game';
 import { calculateCommanderRank } from '../utils/physicsSimulation';
 import { MissionHistoryPanel } from './MissionHistoryPanel';
@@ -13,7 +13,7 @@ interface EndGameModalProps {
   cropsPct: number;
   failureReason: string | null;
   traceLog: MissionTraceEntry[];
-  victoryCommendation?: { text: string; isAiGenerated: boolean } | null;
+  victoryCommendation?: { text: string; isLiveTransmission: boolean } | null;
   onPlayAgain: () => void;
 }
 
@@ -104,7 +104,7 @@ export function EndGameModal({
               id="endgame-title"
               className="text-2xl sm:text-3xl font-extrabold text-slate-900 mb-2"
             >
-              Junior Astronaut Hero Certified!
+              AstroJun Hero Certified!
             </h2>
             <div
               className={`inline-block px-4 py-1 rounded-xl border-2 font-display font-extrabold text-sm mb-4 ${rankInfo.borderClass} ${rankInfo.colorClass}`}
@@ -118,12 +118,6 @@ export function EndGameModal({
                   <Headphones className="w-4 h-4" />
                   <span>Earth Buddy Victory High-Five</span>
                 </div>
-                {victoryCommendation?.isAiGenerated && (
-                  <span className="px-2 py-0.5 rounded-lg bg-white border border-sky-200 text-sky-800 text-[10px] font-bold flex items-center gap-1">
-                    <Sparkles className="w-3 h-3 text-blue-600" />
-                    <span>Live AI Helper</span>
-                  </span>
-                )}
               </div>
               <p className="text-xs sm:text-sm text-slate-800 font-semibold leading-relaxed">
                 {victoryCommendation

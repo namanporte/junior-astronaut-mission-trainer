@@ -22,7 +22,6 @@ import {
   RotateCcw,
   Shield,
   SlidersHorizontal,
-  Sparkles,
   Sprout,
   Sun,
   Umbrella,
@@ -71,7 +70,7 @@ interface BottomControlDockProps {
   upcomingFlare: SolarFlareEvent | null;
   commsTarget: CommsTarget;
   commsDelaySeconds: number;
-  commsMessage: { text: string; isAiGenerated: boolean } | null;
+  commsMessage: { text: string; isLiveTransmission: boolean } | null;
   commsLoading: boolean;
   radioSpeaking: boolean;
   dpadRef: React.MutableRefObject<DpadVector>;
@@ -701,12 +700,6 @@ export function BottomControlDock({
                         />
                       </span>
                       UHF Voice Active
-                    </span>
-                  )}
-                  {commsMessage?.isAiGenerated && (
-                    <span className="inline-flex items-center gap-1 text-[10px] text-amber-300">
-                      <Sparkles className="w-3 h-3" />
-                      Live Helper
                     </span>
                   )}
                 </div>

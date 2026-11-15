@@ -202,7 +202,7 @@ export function resolveEndOfSolStorm(params: {
   systems: BaseSystemsState;
   flareEvent: SolarFlareEvent;
   capcomMessage: string;
-  capcomAiPowered: boolean;
+  capcomLiveRadio: boolean;
 }): {
   debrief: SolDebriefData;
   endSystems: BaseSystemsState;
@@ -218,7 +218,7 @@ export function resolveEndOfSolStorm(params: {
     systems,
     flareEvent,
     capcomMessage,
-    capcomAiPowered
+    capcomLiveRadio
   } = params;
 
   const reqElec = getRequiredElectrolysisKw(world, systems);
@@ -302,7 +302,7 @@ export function resolveEndOfSolStorm(params: {
       radiationDamage,
       spacePhysicsLesson,
       capcomMessage,
-      capcomAiPowered
+      capcomLiveRadio
     },
     endSystems,
     juryRigBurst

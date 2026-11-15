@@ -1,4 +1,4 @@
-// Zero-dependency Web Audio API synthesizer for Junior Astronaut: Lunar Outpost
+// Zero-dependency Web Audio API synthesizer for AstroJun
 
 class SpaceSoundEngine {
   private ctx: AudioContext | null = null;

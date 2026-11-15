@@ -4,8 +4,8 @@ import {
   CheckCircle2,
   Droplets,
   Headphones,
+  Radio,
   Shield,
-  Sparkles,
   Sprout,
   Thermometer,
   TriangleAlert,
@@ -240,8 +240,8 @@ export function SolDebriefModal({
               </button>
 
               <span className="px-2 py-0.5 rounded-lg bg-white border border-sky-200 text-sky-800 text-[11px] font-bold flex items-center gap-1">
-                <Sparkles className="w-3 h-3 text-blue-600" />
-                <span>{debrief.capcomAiPowered ? 'Live AI Helper' : 'Space Radio'}</span>
+                <Radio className="w-3 h-3 text-blue-600" />
+                <span>Space Radio</span>
               </span>
             </div>
           </div>

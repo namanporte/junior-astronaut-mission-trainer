@@ -27,7 +27,7 @@ export interface CapcomDebriefInput {
 
 export interface CapcomResponse {
   text: string;
-  isAiGenerated: boolean;
+  isLiveTransmission: boolean;
 }
 
 const CAPCOM_TIMEOUT_MS = 4500;
@@ -110,17 +110,17 @@ function buildFallbackVictoryCommendation(params: {
 export async function generateSolDebriefFeedback(
   gameState: CapcomDebriefInput
 ): Promise<CapcomResponse> {
-  const aiText = await postCapcomEndpoint('/api/capcom/debrief', {
+  const liveText = await postCapcomEndpoint('/api/capcom/debrief', {
     ...gameState,
     stormName: getFlareNickname(gameState.severityLevel)
   });
 
-  if (aiText) {
-    return { text: aiText, isAiGenerated: true };
+  if (liveText) {
+    return { text: liveText, isLiveTransmission: true };
   }
   return {
     text: buildFallbackDebrief(gameState),
-    isAiGenerated: false
+    isLiveTransmission: false
   };
 }
 
@@ -131,7 +131,7 @@ export async function generateEarthCommsHint(
   reqGrowKw: number,
   commsTarget: CommsTarget
 ): Promise<CapcomResponse> {
-  const aiText = await postCapcomEndpoint('/api/capcom/hint', {
+  const liveText = await postCapcomEndpoint('/api/capcom/hint', {
     upcomingFlare: {
       stormName: getFlareNickname(upcomingFlare.severityLevel),
       requiredShieldKw: upcomingFlare.requiredShieldKw
@@ -142,12 +142,12 @@ export async function generateEarthCommsHint(
     commsTarget
   });
 
-  if (aiText) {
-    return { text: aiText, isAiGenerated: true };
+  if (liveText) {
+    return { text: liveText, isLiveTransmission: true };
   }
   return {
     text: buildFallbackHint(upcomingFlare, currentSliders, reqElecKw, reqGrowKw),
-    isAiGenerated: false
+    isLiveTransmission: false
   };
 }
 
@@ -159,13 +159,13 @@ export async function generateVictoryCommendation(params: {
   world: WorldBody;
   siteName: string;
 }): Promise<CapcomResponse> {
-  const aiText = await postCapcomEndpoint('/api/capcom/victory', params);
+  const liveText = await postCapcomEndpoint('/api/capcom/victory', params);
 
-  if (aiText) {
-    return { text: aiText, isAiGenerated: true };
+  if (liveText) {
+    return { text: liveText, isLiveTransmission: true };
   }
   return {
     text: buildFallbackVictoryCommendation(params),
-    isAiGenerated: false
+    isLiveTransmission: false
   };
 }

@@ -226,7 +226,7 @@ export interface SolDebriefData {
   radiationDamage: number;
   spacePhysicsLesson: string;
   capcomMessage: string;
-  capcomAiPowered: boolean;
+  capcomLiveRadio: boolean;
 }
 
 export type CommanderRank = 'GOLD' | 'SILVER' | 'BRONZE';

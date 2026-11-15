@@ -62,7 +62,7 @@ export function OnboardingModal({
             id="quickstart-title"
             className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900 text-balance"
           >
-            Junior Astronaut: 3D Base Walker
+            AstroJun: 3D Space Outpost
           </h1>
           <p className="text-slate-600 font-medium text-sm mt-1 max-w-xl">
             Step into Mission Control, deploy to a 3D Moon or Mars outpost, solve real space physics
